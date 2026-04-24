@@ -3,10 +3,12 @@ import com.lwg.challenge.libs
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.kotlin.dsl.apply
 import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.dependencies
+import org.gradle.kotlin.dsl.withType
 
 /**
  * Pure Kotlin library module.
@@ -24,6 +26,11 @@ class KotlinLibraryConventionPlugin : Plugin<Project> {
             }
 
             configureKotlin()
+
+            // JUnit 5 (JUnit Platform) 사용 — 없으면 JUnit 4 기본이라 @Test (JUnit 5)가 인식 안 됨
+            tasks.withType<Test>().configureEach {
+                useJUnitPlatform()
+            }
 
             dependencies {
                 "implementation"(libs.kotlin.reflect)

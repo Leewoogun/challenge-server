@@ -21,6 +21,10 @@ dependencies {
     runtimeOnly(libs.jjwt.jackson)
     runtimeOnly(libs.postgresql)
 
+    // Flyway: Spring Boot auto-configures when on classpath. postgresql module required for Flyway 10+.
+    implementation(libs.flyway.core)
+    implementation(libs.flyway.database.postgresql)
+
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.spring.security.test)
     testRuntimeOnly(libs.junit.platform.launcher)

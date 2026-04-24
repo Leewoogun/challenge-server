@@ -17,6 +17,11 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
     open-in-view: false
 
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -24,6 +29,20 @@ spring:
 
 server:
   port: 8080
+
+jwt:
+  # JWT_SECRET 환경변수 필수 (최소 256비트/32바이트). 미설정 시 기동 실패.
+  # 로컬 개발은 셸 export 또는 .env 로드로 주입할 것. 디폴트 제공하지 않음.
+  secret: ${JWT_SECRET}
+  access-token-expiration-ms: 3600000      # 1 hour
+  refresh-token-expiration-ms: 1209600000  # 14 days
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui/index.html
+    disable-swagger-default-url: true
 
 logging:
   level:
