@@ -35,6 +35,8 @@ class KotlinLibraryConventionPlugin : Plugin<Project> {
             dependencies {
                 "implementation"(libs.kotlin.reflect)
                 "testImplementation"(libs.kotlin.test.junit5)
+                // Spring Boot BOM이 관리하는 junit-platform-launcher 정렬. 없으면 JUnit5 엔진이 discover 실패.
+                "testRuntimeOnly"(libs.junit.platform.launcher)
             }
         }
     }

@@ -2,8 +2,10 @@ package com.lwg.challenge.api.auth
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.lwg.challenge.api.auth.dto.KakaoLoginRequest
+import com.lwg.challenge.api.auth.dto.LoginData
 import com.lwg.challenge.api.auth.dto.RefreshRequest
 import com.lwg.challenge.api.common.ResponseCode
+import com.lwg.challenge.api.common.exception.DialogException
 import com.lwg.challenge.api.common.exception.GlobalExceptionHandler
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
@@ -23,7 +25,8 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  *
  * - `@WebMvcTest` 로 컨트롤러·예외 핸들러만 로드 (DB 불필요).
  * - `addFilters = false`로 Spring Security 필터 우회 (이 테스트에선 controller 로직만 검증).
- * - JwtTokenProvider는 Mockito로 모킹.
+ * - kakaoLogin 경로는 AuthService를 mock (Kakao 호출/DB 로직은 AuthKakaoIntegrationTest에서 커버).
+ * - refresh 경로는 JwtTokenProvider를 mock (foundation에서 완성된 로직이 그대로 유지됨을 확인).
  */
 @WebMvcTest(controllers = [AuthController::class])
 @AutoConfigureMockMvc(addFilters = false)
@@ -37,17 +40,23 @@ class AuthControllerTest {
     lateinit var objectMapper: ObjectMapper
 
     @MockitoBean
+    lateinit var authService: AuthService
+
+    @MockitoBean
     lateinit var jwtTokenProvider: JwtTokenProvider
 
     @Test
-    fun `kakaoLogin - 정상 요청이면 200 + tokens 반환`() {
-        Mockito.`when`(jwtTokenProvider.generateAccessToken(1L)).thenReturn("access-token")
-        Mockito.`when`(jwtTokenProvider.generateRefreshToken(1L)).thenReturn("refresh-token")
-
-        val request = KakaoLoginRequest(
-            kakaoAccessToken = "kakao-abc",
-            phoneNumber = "+821012345678",
+    fun `kakaoLogin - 정상 요청이면 AuthService 결과를 래핑하여 200 반환`() {
+        Mockito.`when`(authService.loginWithKakao("kakao-code-abc")).thenReturn(
+            LoginData(
+                accessToken = "access-token",
+                refreshToken = "refresh-token",
+                userId = 42L,
+                isNewUser = true,
+            )
         )
+
+        val request = KakaoLoginRequest(code = "kakao-code-abc")
 
         mockMvc.perform(
             post("/api/v1/auth/kakao")
@@ -59,13 +68,13 @@ class AuthControllerTest {
             .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
             .andExpect(jsonPath("$.data.accessToken").value("access-token"))
             .andExpect(jsonPath("$.data.refreshToken").value("refresh-token"))
-            .andExpect(jsonPath("$.data.userId").value(1))
-            .andExpect(jsonPath("$.data.isNewUser").value(false))
+            .andExpect(jsonPath("$.data.userId").value(42))
+            .andExpect(jsonPath("$.data.isNewUser").value(true))
     }
 
     @Test
-    fun `kakaoLogin - kakaoAccessToken 공백이면 HTTP 200 + code 700`() {
-        val body = mapOf("kakaoAccessToken" to "", "phoneNumber" to null)
+    fun `kakaoLogin - code 공백이면 HTTP 200 + code 700`() {
+        val body = mapOf("code" to "")
 
         mockMvc.perform(
             post("/api/v1/auth/kakao")
@@ -75,6 +84,23 @@ class AuthControllerTest {
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(true))
             .andExpect(jsonPath("$.code").value(ResponseCode.SNACKBAR_ERROR))
+    }
+
+    @Test
+    fun `kakaoLogin - AuthService에서 DialogException이면 HTTP 200 + code 701`() {
+        Mockito.`when`(authService.loginWithKakao("bad-code"))
+            .thenThrow(DialogException("카카오 로그인이 만료되었습니다. 다시 시도해주세요"))
+
+        val request = KakaoLoginRequest(code = "bad-code")
+
+        mockMvc.perform(
+            post("/api/v1/auth/kakao")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request))
+        )
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.error").value(true))
+            .andExpect(jsonPath("$.code").value(ResponseCode.DIALOG_ERROR))
     }
 
     @Test

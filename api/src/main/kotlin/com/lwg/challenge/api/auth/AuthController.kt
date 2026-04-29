@@ -1,13 +1,11 @@
 package com.lwg.challenge.api.auth
 
 import com.lwg.challenge.api.auth.dto.KakaoLoginRequest
-import com.lwg.challenge.api.auth.dto.LoginData
 import com.lwg.challenge.api.auth.dto.LoginResponse
 import com.lwg.challenge.api.auth.dto.RefreshData
 import com.lwg.challenge.api.auth.dto.RefreshRequest
 import com.lwg.challenge.api.auth.dto.RefreshResponse
 import com.lwg.challenge.api.common.BaseResponse
-import com.lwg.challenge.api.common.exception.SnackbarException
 import com.lwg.challenge.api.common.exception.UnauthorizedException
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
@@ -20,43 +18,29 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 
 /**
- * 인증 엔드포인트 (Sprint 0 foundation).
+ * 인증 엔드포인트.
  *
- * TODO Sprint 1 `auth-kakao`:
- *  - kakaoLogin에서 Kakao `/v2/user/me` API로 access_token 실제 검증
- *  - users 테이블 upsert + phone_number SHA-256 해시 저장 (ADR-0008)
- *  - logout에서 Refresh Token blacklist + fcm_token null 처리
+ * - `/kakao`: Authorization code → 서버가 카카오 토큰 교환 + 사용자 정보 조회 → users upsert → 자체 JWT 발급
+ * - `/refresh`: Refresh Token → 새 Access Token (foundation 구현 유지)
+ * - `/logout`: Sprint 0 stub 유지 (Sprint 2 `auth-logout`에서 실구현)
  */
 @RestController
 @RequestMapping("/api/v1/auth")
 @Tag(name = "Auth", description = "인증 엔드포인트")
 class AuthController(
+    private val authService: AuthService,
     private val jwtTokenProvider: JwtTokenProvider,
 ) {
 
     @PostMapping("/kakao")
     @Operation(
         summary = "카카오 로그인",
-        description = "Kakao access_token으로 JWT 발급. Sprint 0: stub — 토큰 비어있지 않으면 임의 userId=1로 JWT 발급.",
+        description = "모바일 WebView가 redirect_uri에서 추출한 authorization code를 받아 " +
+            "서버가 /oauth/token + /v2/user/me 호출 후 자체 JWT 발급.",
     )
     fun kakaoLogin(@Valid @RequestBody request: KakaoLoginRequest): LoginResponse {
-        // TODO Sprint 1: Kakao /v2/user/me로 kakaoAccessToken 검증 + kakao_account.phone_number 대조 + users upsert
-        if (request.kakaoAccessToken.isBlank()) {
-            throw SnackbarException("카카오 토큰이 유효하지 않습니다")
-        }
-
-        val stubUserId = 1L
-        val accessToken = jwtTokenProvider.generateAccessToken(stubUserId)
-        val refreshToken = jwtTokenProvider.generateRefreshToken(stubUserId)
-
-        return LoginResponse(
-            data = LoginData(
-                accessToken = accessToken,
-                refreshToken = refreshToken,
-                userId = stubUserId,
-                isNewUser = false,
-            )
-        )
+        val loginData = authService.loginWithKakao(request.code)
+        return LoginResponse(data = loginData)
     }
 
     @PostMapping("/refresh")
@@ -77,11 +61,10 @@ class AuthController(
     @DeleteMapping("/logout")
     @Operation(
         summary = "로그아웃",
-        description = "Sprint 0: stub — BaseResponse 성공만 반환. Sprint 1+에서 Refresh blacklist + FCM 토큰 제거.",
+        description = "Sprint 0: stub — BaseResponse 성공만 반환. Sprint 2+에서 Refresh blacklist + FCM 토큰 제거.",
     )
     @SecurityRequirement(name = "bearerAuth")
     fun logout(): BaseResponse {
-        // TODO Sprint 1+: Refresh Token blacklist (Redis) + users.fcm_token = null
         return BaseResponse()
     }
 }

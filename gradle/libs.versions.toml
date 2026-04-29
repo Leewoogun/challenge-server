@@ -5,6 +5,8 @@ spring-dependency-management = "1.1.7"
 springdoc = "2.8.6"
 jjwt = "0.12.6"
 querydsl = "5.1.0"
+wiremock = "3.9.1"
+testcontainers = "1.20.4"
 
 [libraries]
 # Spring Boot Starters
@@ -14,7 +16,15 @@ spring-boot-starter-data-redis = { module = "org.springframework.boot:spring-boo
 spring-boot-starter-security = { module = "org.springframework.boot:spring-boot-starter-security" }
 spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation" }
 spring-boot-starter-websocket = { module = "org.springframework.boot:spring-boot-starter-websocket" }
+spring-boot-starter-webflux = { module = "org.springframework.boot:spring-boot-starter-webflux" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
+
+# WireMock (통합 테스트에서 Kakao API 응답 스텁)
+wiremock-standalone = { module = "org.wiremock:wiremock-standalone", version.ref = "wiremock" }
+
+# Testcontainers (Postgres 컨테이너 기반 통합 테스트)
+testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
+testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
 
 # Spring (non-starter)
 spring-context = { module = "org.springframework:spring-context" }
