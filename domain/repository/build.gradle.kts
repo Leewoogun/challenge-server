@@ -4,5 +4,5 @@ plugins {
 
 dependencies {
     implementation(projects.core)
-    implementation(projects.domain.model)
+    api(projects.domain.model)
 }

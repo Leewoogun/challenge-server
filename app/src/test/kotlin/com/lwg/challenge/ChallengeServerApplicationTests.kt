@@ -1,7 +1,7 @@
 package com.lwg.challenge
 
-import com.lwg.challenge.infra.auth.UserJpaRepository
-import com.lwg.challenge.infra.kakao.KakaoOAuthClient
+import com.lwg.challenge.infra.external.kakao.KakaoOAuthClient
+import com.lwg.challenge.infra.jpa.auth.UserJpaRepository
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.bean.override.mockito.MockitoBean

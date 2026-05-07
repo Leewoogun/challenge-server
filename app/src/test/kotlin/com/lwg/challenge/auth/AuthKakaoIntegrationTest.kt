@@ -8,9 +8,9 @@ import com.github.tomakehurst.wiremock.client.WireMock.get
 import com.github.tomakehurst.wiremock.client.WireMock.stubFor
 import com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration
-import com.lwg.challenge.api.common.ResponseCode
 import com.lwg.challenge.core.hash.PhoneHasher
-import com.lwg.challenge.infra.auth.UserJpaRepository
+import com.lwg.challenge.domain.common.ResponseCode
+import com.lwg.challenge.infra.jpa.auth.UserJpaRepository
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals

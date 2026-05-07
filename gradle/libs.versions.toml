@@ -30,6 +30,9 @@ testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.
 spring-context = { module = "org.springframework:spring-context" }
 spring-tx = { module = "org.springframework:spring-tx" }
 
+# Logging (managed by Spring Boot BOM)
+slf4j-api = { module = "org.slf4j:slf4j-api" }
+
 # Jackson
 jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin" }
 

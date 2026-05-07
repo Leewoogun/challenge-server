@@ -1,7 +1,7 @@
 package com.lwg.challenge.config
 
-import com.lwg.challenge.api.auth.JwtAuthenticationFilter
-import com.lwg.challenge.api.auth.JwtTokenProvider
+import com.lwg.challenge.controller.auth.JwtAuthenticationFilter
+import com.lwg.challenge.core.auth.JwtTokenProvider
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
