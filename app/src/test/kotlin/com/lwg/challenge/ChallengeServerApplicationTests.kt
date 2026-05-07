@@ -18,9 +18,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 @SpringBootTest(
     properties = [
         "jwt.secret=test-only-secret-not-used-anywhere-else-minimum-32-bytes-abcdef",
-        // 카카오 키들은 yml에서 default 없이 env var 강제 → smoke test에선 더미 값 주입
-        "kakao.rest-api-key=test-rest-api-key",
-        "kakao.redirect-uri=http://localhost/oauth/kakao/callback",
+        // SDK 방식이라 서버에 카카오 client_id/secret/redirect_uri 가 필요 없음.
+        // api-base-url 만 default(kapi.kakao.com)로 두면 충분 — smoke test 는 실제 호출하지 않음.
         "spring.autoconfigure.exclude=" +
             "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration," +
             "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration," +

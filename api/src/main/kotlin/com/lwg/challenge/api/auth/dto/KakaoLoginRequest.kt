@@ -7,17 +7,17 @@ import jakarta.validation.constraints.Size
 /**
  * 카카오 로그인 요청.
  *
- * CMP 모바일 앱이 WebView로 카카오 인가 페이지를 띄우고, redirect_uri에서 추출한
- * authorization code 만 전달한다. 서버가 code → access_token 교환을 수행하므로
- * client_secret 등 민감 키는 서버에만 존재한다.
+ * 모바일이 Kakao SDK로 직접 획득한 access_token을 그대로 전달한다.
+ * 서버는 이 토큰으로 `GET /v2/user/me` 만 호출 (코드 → 토큰 교환 단계 없음).
+ * SDK 방식이라 `client_secret` / `redirect_uri` 등 OAuth 파라미터는 서버에 보관하지 않는다.
  */
-@Schema(description = "카카오 로그인 요청 (Authorization Code Flow)")
+@Schema(description = "카카오 로그인 요청 (Kakao SDK access_token 전달)")
 data class KakaoLoginRequest(
-    @field:NotBlank(message = "카카오 인가 코드가 누락되었습니다")
-    @field:Size(max = 1024, message = "카카오 인가 코드 길이가 비정상입니다")
+    @field:NotBlank(message = "카카오 토큰이 누락되었습니다")
+    @field:Size(max = 2048, message = "카카오 토큰 길이가 비정상입니다")
     @field:Schema(
-        description = "카카오 OAuth authorization code (모바일 WebView가 redirect_uri의 ?code= 에서 추출)",
-        example = "abc123def456",
+        description = "Kakao SDK가 모바일에서 획득한 access_token",
+        example = "eyJ0eXAiOiJKV1QiLCJhbGciOi...",
     )
-    val code: String,
+    val kakaoAccessToken: String,
 )

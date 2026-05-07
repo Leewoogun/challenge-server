@@ -3,10 +3,8 @@ package com.lwg.challenge.auth
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.github.tomakehurst.wiremock.WireMockServer
 import com.github.tomakehurst.wiremock.client.WireMock.aResponse
-import com.github.tomakehurst.wiremock.client.WireMock.containing
 import com.github.tomakehurst.wiremock.client.WireMock.equalTo
 import com.github.tomakehurst.wiremock.client.WireMock.get
-import com.github.tomakehurst.wiremock.client.WireMock.post
 import com.github.tomakehurst.wiremock.client.WireMock.stubFor
 import com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration
@@ -38,16 +36,16 @@ import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.PostgreSQLContainer
 
 /**
- * 카카오 로그인 (Authorization Code Flow) end-to-end 통합 테스트.
+ * 카카오 로그인 (Kakao SDK access_token 방식) end-to-end 통합 테스트.
  *
  * - Testcontainers Postgres: Flyway V1__init.sql 적용됨 → 실제 스키마 사용.
- * - WireMock: Kakao `/oauth/token` + `/v2/user/me` 응답 스텁. (auth/api 둘 다 같은 호스트로 stub)
+ * - WireMock: Kakao `/v2/user/me` 응답만 스텁 (서버는 더 이상 /oauth/token 호출하지 않음).
  * - 5 케이스:
  *   1. 신규 사용자 (phone 포함) → users INSERT, isNewUser=true, phone_verified=true
  *   2. 기존 사용자 → nickname 업데이트, isNewUser=false
  *   3. phone 미동의 → phone_number=null, phone_verified=false
- *   4. /oauth/token 4xx (invalid code) → HTTP 200 + code=701
- *   5. /v2/user/me 401 (token revoked between calls) → HTTP 200 + code=701
+ *   4. /v2/user/me 401 (token revoked/invalid) → HTTP 200 + code=701
+ *   5. /v2/user/me 5xx → 1회 재시도 후 HTTP 200 + code=703
  *
  * Docker 미가용 환경(로컬 Docker Desktop 꺼짐 등)에서는 JUnit `@EnabledIf`로 테스트 전체를 skip.
  * CI에서는 docker-in-docker 세팅 필요.
@@ -70,8 +68,6 @@ class AuthKakaoIntegrationTest {
     lateinit var userRepository: UserJpaRepository
 
     companion object {
-        private const val TEST_REDIRECT_URI = "http://localhost/oauth/kakao/callback"
-        private const val TEST_REST_API_KEY = "test-rest-api-key"
 
         @JvmStatic
         val postgres: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:16-alpine")
@@ -122,12 +118,8 @@ class AuthKakaoIntegrationTest {
             registry.add("spring.flyway.user") { postgres.username }
             registry.add("spring.flyway.password") { postgres.password }
             registry.add("jwt.secret") { "integration-test-jwt-secret-minimum-32-bytes-xxxxxx" }
-            // 카카오 auth/api를 같은 WireMock 인스턴스로 묶어 stub. /oauth/token 과 /v2/user/me 경로가 다르므로 충돌 없음.
-            registry.add("kakao.auth-base-url") { wireMockServer.baseUrl() }
+            // SDK 방식이라 서버에는 api-base-url 만 필요. /v2/user/me 호출을 WireMock 으로 가로챈다.
             registry.add("kakao.api-base-url") { wireMockServer.baseUrl() }
-            registry.add("kakao.rest-api-key") { TEST_REST_API_KEY }
-            registry.add("kakao.client-secret") { "" }
-            registry.add("kakao.redirect-uri") { TEST_REDIRECT_URI }
         }
     }
 
@@ -138,38 +130,6 @@ class AuthKakaoIntegrationTest {
     }
 
     // ─── Fixtures ────────────────────────────────────────────────
-
-    private fun stubKakaoTokenSuccess(code: String, accessToken: String) {
-        stubFor(
-            post(urlEqualTo("/oauth/token"))
-                .withRequestBody(containing("grant_type=authorization_code"))
-                .withRequestBody(containing("code=$code"))
-                .withRequestBody(containing("client_id=$TEST_REST_API_KEY"))
-                .willReturn(
-                    aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody(
-                            """{"token_type":"bearer","access_token":"$accessToken",""" +
-                                """"expires_in":21599,"refresh_token":"kakao-refresh-$code",""" +
-                                """"refresh_token_expires_in":5183999,"scope":"profile_nickname"}"""
-                        )
-                )
-        )
-    }
-
-    private fun stubKakaoTokenInvalidCode(code: String) {
-        stubFor(
-            post(urlEqualTo("/oauth/token"))
-                .withRequestBody(containing("code=$code"))
-                .willReturn(
-                    aResponse()
-                        .withStatus(400)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("""{"error":"invalid_grant","error_description":"authorization code not found"}""")
-                )
-        )
-    }
 
     private fun stubKakaoUser(
         accessToken: String,
@@ -217,20 +177,31 @@ class AuthKakaoIntegrationTest {
         )
     }
 
-    private fun postLogin(code: String): ResultActions =
+    private fun stubKakaoUserServerError(accessToken: String) {
+        stubFor(
+            get(urlEqualTo("/v2/user/me"))
+                .withHeader("Authorization", equalTo("Bearer $accessToken"))
+                .willReturn(
+                    aResponse()
+                        .withStatus(503)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""{"msg":"service unavailable"}""")
+                )
+        )
+    }
+
+    private fun postLogin(kakaoAccessToken: String): ResultActions =
         mockMvc.perform(
             MockMvcRequestBuilders.post("/api/v1/auth/kakao")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(mapOf("code" to code)))
+                .content(objectMapper.writeValueAsString(mapOf("kakaoAccessToken" to kakaoAccessToken)))
         )
 
     // ─── 1. 신규 사용자 (phone 포함) ────────────────────────────
 
     @Test
     fun `신규 사용자 - Kakao 응답의 정보로 users INSERT 되고 isNewUser=true`() {
-        val code = "new-user-code"
         val kakaoAccessToken = "kakao-access-new"
-        stubKakaoTokenSuccess(code = code, accessToken = kakaoAccessToken)
         stubKakaoUser(
             accessToken = kakaoAccessToken,
             id = 1000001L,
@@ -239,7 +210,7 @@ class AuthKakaoIntegrationTest {
             phoneNumber = "+82 10-1234-5678",
         )
 
-        postLogin(code)
+        postLogin(kakaoAccessToken)
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(false))
             .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
@@ -261,9 +232,7 @@ class AuthKakaoIntegrationTest {
     @Test
     fun `기존 사용자 - nickname 갱신되고 isNewUser=false`() {
         // 1차: 신규 가입
-        val firstCode = "existing-code-1"
         val firstAccess = "kakao-access-existing-1"
-        stubKakaoTokenSuccess(code = firstCode, accessToken = firstAccess)
         stubKakaoUser(
             accessToken = firstAccess,
             id = 1000002L,
@@ -271,15 +240,13 @@ class AuthKakaoIntegrationTest {
             profileImageUrl = null,
             phoneNumber = "+82 10-1111-2222",
         )
-        postLogin(firstCode).andExpect(status().isOk)
+        postLogin(firstAccess).andExpect(status().isOk)
         val afterFirst = userRepository.findByKakaoId(1000002L)!!
         val firstUserId = afterFirst.id
 
         // 2차: 동일 kakao_id + 다른 nickname → update
         wireMockServer.resetAll()
-        val secondCode = "existing-code-2"
         val secondAccess = "kakao-access-existing-2"
-        stubKakaoTokenSuccess(code = secondCode, accessToken = secondAccess)
         stubKakaoUser(
             accessToken = secondAccess,
             id = 1000002L,
@@ -287,7 +254,7 @@ class AuthKakaoIntegrationTest {
             profileImageUrl = "https://example.com/new.png",
             phoneNumber = "+82 10-1111-2222",
         )
-        postLogin(secondCode)
+        postLogin(secondAccess)
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.isNewUser").value(false))
             .andExpect(jsonPath("$.data.userId").value(firstUserId))
@@ -302,9 +269,7 @@ class AuthKakaoIntegrationTest {
 
     @Test
     fun `phone_number_needs_agreement=true면 phone_number=null, phone_verified=false`() {
-        val code = "no-phone-code"
         val kakaoAccessToken = "kakao-access-no-phone"
-        stubKakaoTokenSuccess(code = code, accessToken = kakaoAccessToken)
         stubKakaoUser(
             accessToken = kakaoAccessToken,
             id = 1000003L,
@@ -314,7 +279,7 @@ class AuthKakaoIntegrationTest {
             phoneNumberNeedsAgreement = true,
         )
 
-        postLogin(code)
+        postLogin(kakaoAccessToken)
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(false))
             .andExpect(jsonPath("$.data.isNewUser").value(true))
@@ -324,35 +289,41 @@ class AuthKakaoIntegrationTest {
         assertFalse(saved.phoneVerified)
     }
 
-    // ─── 4. /oauth/token 4xx (invalid code) ─────────────────
+    // ─── 4. /v2/user/me 401 → code=701 ─────────────────────
 
     @Test
-    fun `oauth token 4xx면 HTTP 200 + code=701`() {
-        stubKakaoTokenInvalidCode("bad-code")
+    fun `user me가 401이면 HTTP 200 + code=701`() {
+        val accessToken = "kakao-access-revoked"
+        stubKakaoUserUnauthorized(accessToken)
 
-        postLogin("bad-code")
+        postLogin(accessToken)
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(true))
             .andExpect(jsonPath("$.code").value(ResponseCode.DIALOG_ERROR))
             .andExpect(jsonPath("$.message").value("카카오 로그인이 만료되었습니다. 다시 시도해주세요"))
 
-        // users에 아무것도 저장되지 않음
+        // users 에 아무것도 저장되지 않음
         assertEquals(0, userRepository.count())
     }
 
-    // ─── 5. /v2/user/me 401 ─────────────────────────────────
+    // ─── 5. /v2/user/me 5xx → 1회 재시도 후 code=703 ───────
 
     @Test
-    fun `토큰 교환은 성공했지만 user me가 401이면 HTTP 200 + code=701`() {
-        val code = "exchange-ok-but-userme-401"
-        val accessToken = "kakao-access-revoked"
-        stubKakaoTokenSuccess(code = code, accessToken = accessToken)
-        stubKakaoUserUnauthorized(accessToken)
+    fun `user me가 5xx면 1회 재시도 후 HTTP 200 + code=703`() {
+        val accessToken = "kakao-access-server-error"
+        stubKakaoUserServerError(accessToken)
 
-        postLogin(code)
+        postLogin(accessToken)
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(true))
-            .andExpect(jsonPath("$.code").value(ResponseCode.DIALOG_ERROR))
+            .andExpect(jsonPath("$.code").value(ResponseCode.FULL_SCREEN_ERROR_B))
+            .andExpect(jsonPath("$.message").value("일시적인 장애로 로그인할 수 없습니다"))
+
+        // 1차 호출 + 1회 재시도 = 총 2회 호출되었는지 검증
+        val matchedCalls = wireMockServer.allServeEvents.count { event ->
+            event.request.url == "/v2/user/me"
+        }
+        assertEquals(2, matchedCalls, "5xx 응답에 대해 정확히 1회 재시도가 발생해야 한다 (총 2회 호출)")
 
         assertEquals(0, userRepository.count())
     }

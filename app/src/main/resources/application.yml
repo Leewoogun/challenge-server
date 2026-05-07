@@ -37,18 +37,12 @@ jwt:
   access-token-expiration-ms: 3600000      # 1 hour
   refresh-token-expiration-ms: 1209600000  # 14 days
 
-# Kakao OAuth (ADR-0008).
-# - auth-base-url: kauth.kakao.com (인가/토큰 교환)
-# - api-base-url:  kapi.kakao.com  (사용자 정보 조회)
-# - rest-api-key / redirect-uri: 디벨로퍼 콘솔에서 발급 후 환경변수로 주입 (필수, 미설정 시 기동 실패)
-# - client-secret: 콘솔에서 활성화한 경우만 값이 들어감. 비활성이면 빈 문자열로 남겨두면 됨.
-# 통합 테스트에서는 base-url들을 WireMock URL로 override (@DynamicPropertySource).
+# Kakao API (ADR-0008, SDK 방식).
+# - api-base-url: kapi.kakao.com — 모바일이 SDK로 받은 access_token으로 /v2/user/me 호출.
+# - 코드↔토큰 교환(/oauth/token)은 SDK가 클라이언트에서 끝내므로 서버에는 rest-api-key/client-secret/redirect-uri 가 필요 없다.
+# 통합 테스트에서는 api-base-url을 WireMock URL로 override (@DynamicPropertySource).
 kakao:
-  auth-base-url: ${KAKAO_AUTH_BASE_URL:https://kauth.kakao.com}
   api-base-url: ${KAKAO_API_BASE_URL:https://kapi.kakao.com}
-  rest-api-key: ${KAKAO_REST_API_KEY}
-  client-secret: ${KAKAO_CLIENT_SECRET:}
-  redirect-uri: ${KAKAO_REDIRECT_URI}
   webclient:
     connect-timeout-ms: 2000
     read-timeout-ms: 5000

@@ -47,7 +47,7 @@ class AuthControllerTest {
 
     @Test
     fun `kakaoLogin - 정상 요청이면 AuthService 결과를 래핑하여 200 반환`() {
-        Mockito.`when`(authService.loginWithKakao("kakao-code-abc")).thenReturn(
+        Mockito.`when`(authService.loginWithKakao("kakao-access-token-abc")).thenReturn(
             LoginData(
                 accessToken = "access-token",
                 refreshToken = "refresh-token",
@@ -56,7 +56,7 @@ class AuthControllerTest {
             )
         )
 
-        val request = KakaoLoginRequest(code = "kakao-code-abc")
+        val request = KakaoLoginRequest(kakaoAccessToken = "kakao-access-token-abc")
 
         mockMvc.perform(
             post("/api/v1/auth/kakao")
@@ -73,8 +73,8 @@ class AuthControllerTest {
     }
 
     @Test
-    fun `kakaoLogin - code 공백이면 HTTP 200 + code 700`() {
-        val body = mapOf("code" to "")
+    fun `kakaoLogin - kakaoAccessToken 공백이면 HTTP 200 + code 700`() {
+        val body = mapOf("kakaoAccessToken" to "")
 
         mockMvc.perform(
             post("/api/v1/auth/kakao")
@@ -88,10 +88,10 @@ class AuthControllerTest {
 
     @Test
     fun `kakaoLogin - AuthService에서 DialogException이면 HTTP 200 + code 701`() {
-        Mockito.`when`(authService.loginWithKakao("bad-code"))
+        Mockito.`when`(authService.loginWithKakao("bad-token"))
             .thenThrow(DialogException("카카오 로그인이 만료되었습니다. 다시 시도해주세요"))
 
-        val request = KakaoLoginRequest(code = "bad-code")
+        val request = KakaoLoginRequest(kakaoAccessToken = "bad-token")
 
         mockMvc.perform(
             post("/api/v1/auth/kakao")

@@ -12,45 +12,39 @@ import com.lwg.challenge.infra.kakao.KakaoServerException
 import com.lwg.challenge.infra.kakao.KakaoTokenInvalidException
 import com.lwg.challenge.infra.kakao.KakaoUserResponse
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDateTime
 
 /**
- * 카카오 로그인 서비스 (Authorization Code Flow).
+ * 카카오 로그인 서비스 (Kakao SDK access_token 방식).
  *
- * 1. authorization code → access_token 교환 (`/oauth/token`)
- * 2. access_token으로 사용자 정보 조회 (`/v2/user/me`)
+ * 1. 모바일이 SDK로 받은 access_token 그대로 수신
+ * 2. access_token으로 사용자 정보 조회 (`/v2/user/me`, Authorization: Bearer)
  * 3. kakao_id로 users 조회 → 신규면 INSERT, 기존이면 UPDATE (nickname, profile, phone)
  * 4. phone_number는 SHA-256(정규화된 번호) 저장 (ADR-0008)
  * 5. 자체 JWT access/refresh 토큰 발급
  *
- * 카카오의 access_token / refresh_token은 보관하지 않는다 — 사용자 정보 조회 한 번에만 쓰고 버린다.
+ * 카카오의 access_token은 보관하지 않는다 — 사용자 정보 조회 한 번에만 쓰고 버린다.
+ * code → token 교환은 SDK가 클라이언트에서 이미 끝내고 access_token까지 넘겨주므로 서버에는 필요 없다.
  */
 @Service
 class AuthService(
     private val kakaoOAuthClient: KakaoOAuthClient,
     private val userRepository: UserJpaRepository,
     private val jwtTokenProvider: JwtTokenProvider,
-    @Value("\${kakao.redirect-uri}") private val redirectUri: String,
 ) {
 
     private val log = LoggerFactory.getLogger(AuthService::class.java)
 
     @Transactional
-    fun loginWithKakao(code: String): LoginData {
-        // 1. code → access_token 교환
-        val kakaoToken = mapKakaoExceptions("토큰 교환") {
-            kakaoOAuthClient.exchangeCodeForToken(code, redirectUri)
-        }
-
-        // 2. access_token → 사용자 정보
+    fun loginWithKakao(kakaoAccessToken: String): LoginData {
+        // 1. access_token → 사용자 정보
         val kakaoUser: KakaoUserResponse = mapKakaoExceptions("사용자 정보 조회") {
-            kakaoOAuthClient.getUserInfo(kakaoToken.accessToken)
+            kakaoOAuthClient.getUserInfo(kakaoAccessToken)
         }
 
-        // 3. phone 처리
+        // 2. phone 처리
         val phoneHash: String? = extractPhoneHash(kakaoUser)
         val phoneVerified: Boolean = phoneHash != null
 
@@ -58,7 +52,7 @@ class AuthService(
             ?: "사용자${kakaoUser.id}").take(NICKNAME_MAX_LENGTH)
         val profileImageUrl: String? = kakaoUser.kakaoAccount?.profile?.profileImageUrl
 
-        // 4. users upsert
+        // 3. users upsert
         val existing: UserEntity? = userRepository.findByKakaoId(kakaoUser.id)
         val isNewUser: Boolean
         val userId: Long
@@ -91,7 +85,7 @@ class AuthService(
             log.info("기존 사용자 로그인: userId={}, kakaoId={}", userId, kakaoUser.id)
         }
 
-        // 5. 자체 JWT 발급
+        // 4. 자체 JWT 발급
         val accessToken = jwtTokenProvider.generateAccessToken(userId)
         val refreshToken = jwtTokenProvider.generateRefreshToken(userId)
 
@@ -105,8 +99,8 @@ class AuthService(
 
     /**
      * 카카오 호출 예외를 우리 에러 응답 체계로 변환.
-     * - Token invalid (4xx) → 다이얼로그 (재로그인 유도)
-     * - Server error (5xx/network) → 풀스크린 (일시 장애 안내)
+     * - Token invalid (401/403) → 다이얼로그 (재로그인 유도, code=701)
+     * - Server error (5xx/network, 1회 재시도 후) → 풀스크린 (일시 장애 안내, code=703)
      */
     private inline fun <T> mapKakaoExceptions(stage: String, action: () -> T): T = try {
         action()

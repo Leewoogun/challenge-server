@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController
 /**
  * 인증 엔드포인트.
  *
- * - `/kakao`: Authorization code → 서버가 카카오 토큰 교환 + 사용자 정보 조회 → users upsert → 자체 JWT 발급
+ * - `/kakao`: Kakao SDK가 모바일에서 받아온 access_token 을 받아 서버가 /v2/user/me 호출 → users upsert → 자체 JWT 발급
  * - `/refresh`: Refresh Token → 새 Access Token (foundation 구현 유지)
  * - `/logout`: Sprint 0 stub 유지 (Sprint 2 `auth-logout`에서 실구현)
  */
@@ -35,11 +35,10 @@ class AuthController(
     @PostMapping("/kakao")
     @Operation(
         summary = "카카오 로그인",
-        description = "모바일 WebView가 redirect_uri에서 추출한 authorization code를 받아 " +
-            "서버가 /oauth/token + /v2/user/me 호출 후 자체 JWT 발급.",
+        description = "모바일이 Kakao SDK로 획득한 access_token을 받아 서버가 /v2/user/me 호출 후 자체 JWT 발급.",
     )
     fun kakaoLogin(@Valid @RequestBody request: KakaoLoginRequest): LoginResponse {
-        val loginData = authService.loginWithKakao(request.code)
+        val loginData = authService.loginWithKakao(request.kakaoAccessToken)
         return LoginResponse(data = loginData)
     }
 
