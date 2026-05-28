@@ -13,7 +13,7 @@ import jakarta.persistence.Table
 import java.time.LocalDateTime
 
 /**
- * users 테이블 JPA 매핑. V1__init.sql 스키마와 1:1.
+ * users 테이블 JPA 매핑. V1__init.sql + V3 (refresh token rotation) 스키마.
  *
  * - kotlin-jpa 플러그인이 no-arg 생성자를 자동 생성.
  * - 필드는 var — JPA 가 필드 단위로 값을 채우거나 갱신.
@@ -52,6 +52,12 @@ class UserEntity(
 
     @Column(name = "updated_at", nullable = false)
     var updatedAt: LocalDateTime = LocalDateTime.now(),
+
+    @Column(name = "refresh_token_hash", length = 64)
+    var refreshTokenHash: String? = null,
+
+    @Column(name = "refresh_token_issued_at")
+    var refreshTokenIssuedAt: LocalDateTime? = null,
 ) {
 
     @PrePersist
@@ -77,6 +83,8 @@ class UserEntity(
         status = runCatching { UserStatus.valueOf(status) }.getOrDefault(UserStatus.ACTIVE),
         createdAt = createdAt,
         updatedAt = updatedAt,
+        refreshTokenHash = refreshTokenHash,
+        refreshTokenIssuedAt = refreshTokenIssuedAt,
     )
 
     companion object {
@@ -91,6 +99,8 @@ class UserEntity(
             status = user.status.name,
             createdAt = user.createdAt,
             updatedAt = user.updatedAt,
+            refreshTokenHash = user.refreshTokenHash,
+            refreshTokenIssuedAt = user.refreshTokenIssuedAt,
         )
     }
 }

@@ -5,6 +5,7 @@ import com.lwg.challenge.domain.user.UserRepository
 import com.lwg.challenge.infra.entity.auth.UserEntity
 import com.lwg.challenge.infra.jpa.auth.UserJpaRepository
 import org.springframework.stereotype.Component
+import java.time.LocalDateTime
 
 /**
  * `UserRepository` 도메인 인터페이스의 JPA 구현체.
@@ -20,6 +21,13 @@ class UserRepositoryImpl(
     override fun findByKakaoId(kakaoId: Long): User? =
         jpa.findByKakaoId(kakaoId)?.toDomain()
 
+    override fun findById(id: Long): User? =
+        jpa.findById(id).map { it.toDomain() }.orElse(null)
+
     override fun save(user: User): User =
         jpa.save(UserEntity.fromDomain(user)).toDomain()
+
+    override fun updateRefreshTokenHash(userId: Long, hash: String?, issuedAt: LocalDateTime?) {
+        jpa.updateRefreshTokenHash(userId, hash, issuedAt)
+    }
 }

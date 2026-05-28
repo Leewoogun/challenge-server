@@ -22,6 +22,10 @@ data class User(
     val status: UserStatus,
     val createdAt: LocalDateTime,
     val updatedAt: LocalDateTime,
+    /** 현재 유효한 refresh 토큰의 sha256 hex (64자). rotation 시 갱신, 로그아웃 시 null. */
+    val refreshTokenHash: String? = null,
+    /** 위 hash 의 발급 시각. 감사 용도. */
+    val refreshTokenIssuedAt: LocalDateTime? = null,
 )
 
 enum class UserStatus {

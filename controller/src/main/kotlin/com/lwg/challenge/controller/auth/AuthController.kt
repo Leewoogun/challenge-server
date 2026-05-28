@@ -7,10 +7,9 @@ import com.lwg.challenge.controller.auth.dto.RefreshData
 import com.lwg.challenge.controller.auth.dto.RefreshRequest
 import com.lwg.challenge.controller.auth.dto.RefreshResponse
 import com.lwg.challenge.controller.common.BaseResponse
-import com.lwg.challenge.core.auth.JwtTokenProvider
-import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.service.auth.AuthService
 import com.lwg.challenge.service.auth.LoginResult
+import com.lwg.challenge.service.auth.RefreshResult
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import io.swagger.v3.oas.annotations.tags.Tag
@@ -26,7 +25,6 @@ import org.springframework.web.bind.annotation.RestController
 @Tag(name = "Auth", description = "인증 엔드포인트")
 class AuthController(
     private val authService: AuthService,
-    private val jwtTokenProvider: JwtTokenProvider,
 ) {
 
     @PostMapping("/kakao")
@@ -48,17 +46,17 @@ class AuthController(
 
     @PostMapping("/refresh")
     @Operation(
-        summary = "Access Token 재발급",
-        description = "Refresh Token 검증 후 새 Access Token 발급. Refresh Token 자체는 재발급하지 않는다.",
+        summary = "Access Token 재발급 (Rotation)",
+        description = "Refresh Token 검증 후 새 access + 새 refresh 를 함께 발급한다. 이전 refresh 는 즉시 무효화된다.",
     )
     fun refresh(@Valid @RequestBody request: RefreshRequest): RefreshResponse {
-        val userId = jwtTokenProvider.verifyAndGetUserId(
-            request.refreshToken,
-            expectedType = JwtTokenProvider.TOKEN_TYPE_REFRESH,
-        ) ?: throw UnauthorizedException("Refresh Token 이 유효하지 않거나 만료되었습니다")
-
-        val newAccessToken = jwtTokenProvider.generateAccessToken(userId)
-        return RefreshResponse(data = RefreshData(accessToken = newAccessToken))
+        val result: RefreshResult = authService.refresh(request.refreshToken)
+        return RefreshResponse(
+            data = RefreshData(
+                accessToken = result.accessToken,
+                refreshToken = result.refreshToken,
+            ),
+        )
     }
 
     @DeleteMapping("/logout")
