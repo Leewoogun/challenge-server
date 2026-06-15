@@ -21,6 +21,14 @@ interface UserRepository {
     fun findById(id: Long): User?
 
     /**
+     * 여러 id 를 한 번에 조회하여 id → User 맵으로 반환.
+     *
+     * home-feed 응답에서 상대방(opponent) 닉네임 N 명을 한 SELECT 로 가져오기 위해 사용.
+     * 빈 컬렉션을 넘기면 빈 맵을 반환.
+     */
+    fun findAllByIds(ids: Collection<Long>): Map<Long, User>
+
+    /**
      * 사용자 저장.
      *
      * - `user.id == null` ⇒ 신규 INSERT 후 id 가 채워진 User 반환.

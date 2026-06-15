@@ -2,6 +2,9 @@ package com.lwg.challenge
 
 import com.lwg.challenge.infra.external.kakao.KakaoOAuthClient
 import com.lwg.challenge.infra.jpa.auth.UserJpaRepository
+import com.lwg.challenge.infra.jpa.challenge.ChallengeJpaRepository
+import com.lwg.challenge.infra.jpa.userrecord.UserRecordJpaRepository
+import com.lwg.challenge.infra.jpa.verification.VerificationJpaRepository
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.test.context.bean.override.mockito.MockitoBean
@@ -31,9 +34,18 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 )
 class ChallengeServerApplicationTests {
 
-    // JPA가 제외됐으므로 Repository 빈을 직접 mock으로 공급. AuthService가 주입받는 의존성 충족용.
+    // JPA가 제외됐으므로 Repository 빈을 직접 mock으로 공급. AuthService / RecordService / ActiveChallengeService 의존성 충족용.
     @MockitoBean
     lateinit var userRepository: UserJpaRepository
+
+    @MockitoBean
+    lateinit var userRecordRepository: UserRecordJpaRepository
+
+    @MockitoBean
+    lateinit var challengeRepository: ChallengeJpaRepository
+
+    @MockitoBean
+    lateinit var verificationRepository: VerificationJpaRepository
 
     // KakaoOAuthClient는 실제로는 @Component라 생성되지만, 테스트 환경에서 네트워크 호출되면 안 되므로 mock.
     @MockitoBean

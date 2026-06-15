@@ -24,6 +24,14 @@ class UserRepositoryImpl(
     override fun findById(id: Long): User? =
         jpa.findById(id).map { it.toDomain() }.orElse(null)
 
+    override fun findAllByIds(ids: Collection<Long>): Map<Long, User> {
+        if (ids.isEmpty()) return emptyMap()
+        return jpa.findAllById(ids).associate { entity ->
+            val resolvedId = entity.id ?: error("UserEntity id 가 null 일 수 없습니다 (영속 row)")
+            resolvedId to entity.toDomain()
+        }
+    }
+
     override fun save(user: User): User =
         jpa.save(UserEntity.fromDomain(user)).toDomain()
 

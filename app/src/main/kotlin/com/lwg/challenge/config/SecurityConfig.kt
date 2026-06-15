@@ -22,6 +22,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 @Configuration
 class SecurityConfig(
     private val jwtTokenProvider: JwtTokenProvider,
+    private val unauthorizedEntryPoint: UnauthorizedEntryPoint,
 ) {
 
     @Bean
@@ -45,6 +46,8 @@ class SecurityConfig(
                     ).permitAll()
                     .anyRequest().authenticated()
             }
+            // ADR-0002: 인증 실패도 HTTP 200 + code=401 로 변환. 모바일 ApiResultCall 일관성 확보.
+            .exceptionHandling { it.authenticationEntryPoint(unauthorizedEntryPoint) }
             .addFilterBefore(
                 JwtAuthenticationFilter(jwtTokenProvider),
                 UsernamePasswordAuthenticationFilter::class.java,
