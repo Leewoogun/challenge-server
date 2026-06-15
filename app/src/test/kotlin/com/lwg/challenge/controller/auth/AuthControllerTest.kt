@@ -4,11 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lwg.challenge.controller.auth.dto.KakaoLoginRequest
 import com.lwg.challenge.controller.auth.dto.RefreshRequest
 import com.lwg.challenge.controller.common.exception.GlobalExceptionHandler
-import com.lwg.challenge.core.auth.JwtTokenProvider
 import com.lwg.challenge.domain.common.ResponseCode
 import com.lwg.challenge.domain.common.exception.DialogException
+import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.service.auth.AuthService
 import com.lwg.challenge.service.auth.LoginResult
+import com.lwg.challenge.service.auth.RefreshResult
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.springframework.beans.factory.annotation.Autowired
@@ -28,7 +29,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
  * - `@WebMvcTest` 로 컨트롤러·예외 핸들러만 로드 (DB 불필요).
  * - `addFilters = false`로 Spring Security 필터 우회 (이 테스트에선 controller 로직만 검증).
  * - kakaoLogin 경로는 AuthService를 mock (Kakao 호출/DB 로직은 AuthKakaoIntegrationTest에서 커버).
- * - refresh 경로는 JwtTokenProvider를 mock (foundation에서 완성된 로직이 그대로 유지됨을 확인).
+ * - refresh 경로도 AuthService.refresh()를 mock (rotation 로직 본체는 AuthServiceRefreshTest 후보, ADR-0009).
  */
 @WebMvcTest(controllers = [AuthController::class])
 @AutoConfigureMockMvc(addFilters = false)
@@ -43,9 +44,6 @@ class AuthControllerTest {
 
     @MockitoBean
     lateinit var authService: AuthService
-
-    @MockitoBean
-    lateinit var jwtTokenProvider: JwtTokenProvider
 
     @Test
     fun `kakaoLogin - 정상 요청이면 AuthService 결과를 래핑하여 200 반환`() {
@@ -106,9 +104,10 @@ class AuthControllerTest {
     }
 
     @Test
-    fun `refresh - 유효한 refresh token이면 새 access token 발급`() {
-        Mockito.`when`(jwtTokenProvider.verifyAndGetUserId("valid-refresh", "refresh")).thenReturn(42L)
-        Mockito.`when`(jwtTokenProvider.generateAccessToken(42L)).thenReturn("new-access")
+    fun `refresh - 유효한 refresh token이면 새 access + refresh 발급`() {
+        Mockito.`when`(authService.refresh("valid-refresh")).thenReturn(
+            RefreshResult(accessToken = "new-access", refreshToken = "new-refresh"),
+        )
 
         val request = RefreshRequest(refreshToken = "valid-refresh")
 
@@ -119,12 +118,15 @@ class AuthControllerTest {
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(false))
+            .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
             .andExpect(jsonPath("$.data.accessToken").value("new-access"))
+            .andExpect(jsonPath("$.data.refreshToken").value("new-refresh"))
     }
 
     @Test
     fun `refresh - invalid refresh token이면 HTTP 200 + code 401`() {
-        Mockito.`when`(jwtTokenProvider.verifyAndGetUserId("invalid", "refresh")).thenReturn(null)
+        Mockito.`when`(authService.refresh("invalid"))
+            .thenThrow(UnauthorizedException("유효하지 않은 refresh token 입니다"))
 
         val request = RefreshRequest(refreshToken = "invalid")
 
