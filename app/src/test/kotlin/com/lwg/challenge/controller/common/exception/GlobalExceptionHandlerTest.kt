@@ -35,10 +35,10 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    fun `UnauthorizedException은 code 401`() {
+    fun `UnauthorizedException은 HTTP 401 + code 401`() {
         val response = handler.handleBusiness(UnauthorizedException())
 
-        assertEquals(200, response.statusCode.value())
+        assertEquals(401, response.statusCode.value())
         assertEquals(ResponseCode.UNAUTHORIZED, response.body!!.code)
     }
 

@@ -124,7 +124,7 @@ class AuthControllerTest {
     }
 
     @Test
-    fun `refresh - invalid refresh token이면 HTTP 200 + code 401`() {
+    fun `refresh - invalid refresh token이면 HTTP 401 + code 401`() {
         Mockito.`when`(authService.refresh("invalid"))
             .thenThrow(UnauthorizedException("유효하지 않은 refresh token 입니다"))
 
@@ -135,7 +135,7 @@ class AuthControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request))
         )
-            .andExpect(status().isOk)
+            .andExpect(status().isUnauthorized)
             .andExpect(jsonPath("$.error").value(true))
             .andExpect(jsonPath("$.code").value(ResponseCode.UNAUTHORIZED))
     }

@@ -281,9 +281,9 @@ class ActiveChallengeApiIntegrationTest {
     }
 
     @Test
-    fun `토큰이 위조 만료 또는 없으면 HTTP 200 + body code 401`() {
+    fun `토큰이 위조 만료 또는 없으면 HTTP 401 + body code 401`() {
         getActive(token = "not.a.valid.jwt.token")
-            .andExpect(status().isOk)
+            .andExpect(status().isUnauthorized)
             .andExpect(jsonPath("$.error").value(true))
             .andExpect(jsonPath("$.code").value(ResponseCode.UNAUTHORIZED))
     }

@@ -46,7 +46,7 @@ class SecurityConfig(
                     ).permitAll()
                     .anyRequest().authenticated()
             }
-            // ADR-0002: 인증 실패도 HTTP 200 + code=401 로 변환. 모바일 ApiResultCall 일관성 확보.
+            // 인증 실패는 HTTP 401 + body.code=401 (UnauthorizedEntryPoint). 모바일 Ktor Authenticator 가 401 트리거로 refresh 진입.
             .exceptionHandling { it.authenticationEntryPoint(unauthorizedEntryPoint) }
             .addFilterBefore(
                 JwtAuthenticationFilter(jwtTokenProvider),

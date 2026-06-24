@@ -3,8 +3,9 @@ package com.lwg.challenge.domain.common.exception
 import com.lwg.challenge.domain.common.ResponseCode
 
 /**
- * 비즈니스 예외. throw 되면 `:controller` 의 GlobalExceptionHandler 가 잡아
- * HTTP 200 + BaseResponse(error=true, code=X, message)로 변환한다.
+ * 비즈니스 예외. throw 되면 `:controller` 의 GlobalExceptionHandler 가 잡아 변환한다.
+ * - HTTP 표준 범위 코드(400~599)는 해당 HTTP status 로 응답 (예: UnauthorizedException 401 → HTTP 401).
+ * - 700번대 비즈니스 코드(SNACKBAR/DIALOG/FULL_SCREEN 등)는 HTTP 200 + body.code 로 응답.
  */
 abstract class BusinessException(
     val code: Int,

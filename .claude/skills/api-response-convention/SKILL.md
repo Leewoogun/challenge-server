@@ -79,7 +79,7 @@ object ResponseCode {
 | `DialogException` | 701 | 확인 다이얼로그 | 사용자 확인이 필요한 에러 (토큰 만료 → 다시 로그인 안내 등) |
 | `FullScreenException` | 702 / 703 | 전체화면 에러 | 화면 전체가 사용 불가능한 상태 (인프라 장애) |
 | `OneButtonDialogException` | 705 | 단일 버튼 다이얼로그 | 강제로 종료/이동시켜야 하는 상황 (강제 업데이트 등) |
-| `UnauthorizedException` | 401 | 모바일이 refresh 호출 후 자동 재시도 | JWT 만료/무효 |
+| `UnauthorizedException` | 401 | 모바일 Ktor Authenticator 가 401 트리거로 refresh 호출 후 자동 재시도 | JWT 만료/무효. **HTTP status 도 401** |
 
 ## 어떤 예외를 던질지 선택 가이드
 
@@ -151,8 +151,12 @@ private inline fun <T> mapKakaoExceptions(stage: String, action: () -> T): T = t
 class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException::class)
-    fun handleBusiness(e: BusinessException): ResponseEntity<BaseResponse> =
-        ResponseEntity.ok(BaseResponse(error = true, code = e.code, message = e.message ?: ""))
+    fun handleBusiness(e: BusinessException): ResponseEntity<BaseResponse> {
+        val status = if (e.code in 400..599) HttpStatus.valueOf(e.code) else HttpStatus.OK
+        return ResponseEntity.status(status).body(
+            BaseResponse(error = true, code = e.code, message = e.message ?: "")
+        )
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun handleValidation(e: ...): ResponseEntity<BaseResponse> =
@@ -165,11 +169,15 @@ class GlobalExceptionHandler {
 ```
 
 핵심:
-- BusinessException → HTTP **200** + JSON 본문에 error=true, code=7xx
-- Validation 실패 → HTTP **200** + 첫 번째 필드 에러 메시지로 SnackbarException 처리
-- 그 외 모든 예외 → HTTP **500** + INTERNAL_ERROR
+- **HTTP 표준 범위 코드(400~599)** → HTTP status 그대로 + body.code 동일
+  - `UnauthorizedException(401)` → HTTP **401** + body.code=401 (모바일 Ktor Authenticator 가 401 을 트리거로 refresh 진입)
+  - 5xx 도 동일 — HTTP status 와 body.code 일치
+- **700번대 비즈니스 코드(UI 분류)** → HTTP **200** + body.code=7xx
+  - Snackbar/Dialog/FullScreen/OneButtonDialog 는 전송 실패가 아닌 UI 분기용. HTTP status 로 노출하면 미들웨어가 끼어듦
+- Validation 실패 → HTTP **200** + 첫 번째 필드 에러 메시지로 SnackbarException(700) 처리
+- 핸들러로 잡히지 않은 예외 → HTTP **500** + INTERNAL_ERROR
 
-> **HTTP 상태와 비즈니스 코드를 분리하는 이유**: 모바일은 비즈니스 에러 시에도 응답 본문을 파싱해서 처리해야 한다. HTTP 4xx 면 일부 클라이언트가 본문을 파싱하지 않거나, 캐시/로깅 미들웨어가 다르게 처리한다. 그래서 비즈니스 에러는 HTTP 200 으로 통일.
+> **두 갈래로 나누는 이유**: 인증 만료처럼 표준 HTTP 의미를 갖는 에러는 HTTP status 로 내려야 클라이언트 미들웨어(Ktor Authenticator, Retrofit Authenticator 등) 가 refresh 흐름을 자동 처리할 수 있다. 반대로 700번대는 UI 표현 분류일 뿐이라 HTTP status 로 노출하면 캐시/로깅/리트라이 미들웨어가 잘못 반응할 수 있어 200 으로 가둔다.
 
 ## OpenAPI 어노테이션
 
@@ -206,7 +214,7 @@ fun logout(): BaseResponse { ... }
 | 실수 | 수정 |
 |------|------|
 | 컨트롤러에서 `try/catch` | 위임 — BusinessException throw, GlobalExceptionHandler 가 처리 |
-| HTTP 4xx 로 비즈니스 에러 반환 | HTTP 200 고정. 비즈니스 코드는 응답 본문의 `code` 필드 |
+| 700번대 비즈니스 코드를 HTTP 4xx 로 반환 | 700번대는 HTTP 200 + body.code. (4xx/5xx 표준 코드만 HTTP status 로 내림) |
 | `RuntimeException("...")` 직접 throw | BusinessException 하위 중 적합한 것 선택 (SnackbarException 등) |
 | 응답 DTO 가 BaseResponse 상속 안 함 | 무조건 상속. 모바일이 통일된 파싱 로직 사용 |
 | `data` 필드를 `Map<String, Any>` 로 | 명시적 data class — 타입 안전성 + OpenAPI 자동 문서화 |
