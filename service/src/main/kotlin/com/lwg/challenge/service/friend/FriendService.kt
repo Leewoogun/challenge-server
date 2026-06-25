@@ -100,6 +100,9 @@ class FriendService(
         }
 
         // 신규 INSERT (status=PENDING). 동시 INSERT race 는 UNIQUE 제약이 백업.
+        // saveAndFlush 로 즉시 flush — UNIQUE(requester_id, receiver_id) 위반이 try/catch 안에서
+        // DataIntegrityViolationException 으로 잡힌다. save 만 호출하면 flush 가 트랜잭션 commit
+        // 시점으로 미뤄져 catch 블록 밖에서 터지므로 500 으로 변환된다.
         val now = LocalDateTime.now()
         val toInsert = Friendship(
             id = null,
@@ -110,7 +113,7 @@ class FriendService(
             acceptedAt = null,
         )
         return try {
-            friendshipRepository.save(toInsert)
+            friendshipRepository.saveAndFlush(toInsert)
         } catch (e: DataIntegrityViolationException) {
             // 사전 검사 통과 후 동시 INSERT 가 부딪힌 경우.
             throw SnackbarException("이미 요청 보냈습니다")

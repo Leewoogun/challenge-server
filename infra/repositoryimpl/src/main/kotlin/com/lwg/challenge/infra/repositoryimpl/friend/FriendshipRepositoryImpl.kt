@@ -84,6 +84,9 @@ class FriendshipRepositoryImpl(
     override fun save(friendship: Friendship): Friendship =
         jpa.save(FriendshipEntity.fromDomain(friendship)).toDomain()
 
+    override fun saveAndFlush(friendship: Friendship): Friendship =
+        jpa.saveAndFlush(FriendshipEntity.fromDomain(friendship)).toDomain()
+
     override fun deleteById(id: Long) {
         jpa.deleteById(id)
     }

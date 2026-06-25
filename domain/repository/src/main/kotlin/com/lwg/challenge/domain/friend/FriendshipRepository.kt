@@ -53,6 +53,15 @@ interface FriendshipRepository {
     fun save(friendship: Friendship): Friendship
 
     /**
+     * Friendship row 저장 후 즉시 flush.
+     *
+     * sendRequest 신규 INSERT 분기에서 사용. `save` 만 호출하면 EntityManager.persist 만 수행되고
+     * UNIQUE(requester_id, receiver_id) 제약 위반은 트랜잭션 commit 시점에 발생 → service 의 try/catch 밖.
+     * race 시 의도한 `SnackbarException("이미 요청 보냈습니다")` 가 아니라 500 으로 노출되는 문제 방지.
+     */
+    fun saveAndFlush(friendship: Friendship): Friendship
+
+    /**
      * row 물리 삭제 — 요청 취소(cancelRequest)에서만 사용.
      */
     fun deleteById(id: Long)
