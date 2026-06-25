@@ -3,6 +3,7 @@ package com.lwg.challenge
 import com.lwg.challenge.infra.external.kakao.KakaoOAuthClient
 import com.lwg.challenge.infra.jpa.auth.UserJpaRepository
 import com.lwg.challenge.infra.jpa.challenge.ChallengeJpaRepository
+import com.lwg.challenge.infra.jpa.friend.FriendshipJpaRepository
 import com.lwg.challenge.infra.jpa.userrecord.UserRecordJpaRepository
 import com.lwg.challenge.infra.jpa.verification.VerificationJpaRepository
 import org.junit.jupiter.api.Test
@@ -46,6 +47,10 @@ class ChallengeServerApplicationTests {
 
     @MockitoBean
     lateinit var verificationRepository: VerificationJpaRepository
+
+    // friends feature 추가 (T3) — FriendService / FriendshipRepositoryImpl 의존성 충족용.
+    @MockitoBean
+    lateinit var friendshipRepository: FriendshipJpaRepository
 
     // KakaoOAuthClient는 실제로는 @Component라 생성되지만, 테스트 환경에서 네트워크 호출되면 안 되므로 mock.
     @MockitoBean
