@@ -1,5 +1,6 @@
 package com.lwg.challenge.domain.userrecord
 
+import com.lwg.challenge.core.time.KstTime
 import java.time.LocalDateTime
 
 /**
@@ -28,7 +29,7 @@ data class UserRecord(
             draws = 0,
             currentStreak = 0,
             maxStreak = 0,
-            updatedAt = LocalDateTime.now(),
+            updatedAt = KstTime.now(),
         )
     }
 }

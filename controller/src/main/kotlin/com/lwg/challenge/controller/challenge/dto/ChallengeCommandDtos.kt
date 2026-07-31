@@ -8,8 +8,10 @@ import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.Positive
 import jakarta.validation.constraints.Size
-import java.time.Instant
+import com.lwg.challenge.controller.common.WIRE_DATE
+import com.lwg.challenge.controller.common.WIRE_DATETIME
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 /**
  * challenge-create 의 요청/응답 DTO 모음 (api-contract §1~5, status: confirmed).
@@ -18,9 +20,9 @@ import java.time.LocalDate
  * - `LocalDate` → `@JsonFormat(shape = STRING, pattern = "yyyy-MM-dd")` 로 **평문 ISO date** 고정.
  *   모바일이 kotlinx-datetime 을 안 쓰고 `String` 으로 받기 때문에 `[2026,7,28]` 배열이 나가면 즉시 깨진다.
  *   Jackson 설정에 의존하지 않도록 어노테이션을 명시했고, 슬라이스 테스트가 실제 JSON 문자열을 assert 한다.
- * - `Instant` → `@JsonFormat(shape = STRING)` 로 `"2026-07-28T15:00:00Z"`. `Z` suffix 고정, 오프셋 표기 금지.
- *   모바일 매퍼는 파싱 실패 시 `Instant.DISTANT_PAST` 로 폴백해 **조용히** "마감된 카드" 가 되므로
- *   표기가 흔들리면 런타임에 드러나지 않는다.
+ * - `LocalDateTime` → `@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")` (ADR-0010). **`T` 도 `Z` 도 오프셋도 밀리초도 없다.**
+ *   모바일은 이 패턴 전용 커스텀 파서를 쓰며 `T` 구분자가 오면 **실패한다**(실패하는 것 자체가 테스트로 고정돼 있다).
+ *   즉 서버가 표기를 흘리면 조용히 통과하지 않는다.
  * - `challengerProfileImageUrl` 외의 필드는 절대 null / 누락으로 내보내지 않는다.
  *   모바일 DTO 가 전 필드에 기본값을 두는 방어적 패턴이라 누락이 빈 카드로 조용히 삼켜진다.
  */
@@ -60,11 +62,11 @@ data class ChallengeCreateData(
     @field:Schema(example = "PENDING", description = "생성 직후는 항상 PENDING")
     val status: ChallengeStatus,
     @field:Schema(example = "2026-07-28", description = "KST 기준 날짜. 평문 ISO date 문자열")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATE)
     val challengeDate: LocalDate,
-    @field:Schema(example = "2026-07-28T15:00:00Z", description = "ISO-8601 UTC. KST 자정을 UTC 로 환산한 값")
-    @JsonFormat(shape = JsonFormat.Shape.STRING)
-    val deadline: Instant,
+    @field:Schema(example = "2026-08-01 00:00:00", description = "KST 기준. TODAY 선택 시 challengeDate 익일 00:00")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
+    val deadline: LocalDateTime,
 )
 
 // ─── 2. GET /api/v1/challenges/received ──────────────────────────
@@ -95,14 +97,14 @@ data class ReceivedChallengeItem(
     @field:Schema(example = "커피 사기")
     val betContent: String,
     @field:Schema(example = "2026-07-28")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATE)
     val challengeDate: LocalDate,
-    @field:Schema(example = "2026-07-28T15:00:00Z", description = "ISO-8601 UTC")
-    @JsonFormat(shape = JsonFormat.Shape.STRING)
-    val deadline: Instant,
-    @field:Schema(example = "2026-07-28T02:11:00Z", description = "ISO-8601 UTC. 초 단위로 절삭")
-    @JsonFormat(shape = JsonFormat.Shape.STRING)
-    val createdAt: Instant,
+    @field:Schema(example = "2026-08-01 00:00:00", description = "KST 기준")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
+    val deadline: LocalDateTime,
+    @field:Schema(example = "2026-07-28 11:11:00", description = "KST 기준. 초 단위로 절삭")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
+    val createdAt: LocalDateTime,
 )
 
 // ─── 3. POST /api/v1/challenges/{id}/accept ──────────────────────

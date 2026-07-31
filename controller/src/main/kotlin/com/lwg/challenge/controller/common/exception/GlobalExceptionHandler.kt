@@ -6,6 +6,7 @@ import com.lwg.challenge.domain.common.exception.BusinessException
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.http.converter.HttpMessageNotReadableException
 import org.springframework.web.bind.MethodArgumentNotValidException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
@@ -44,6 +45,38 @@ class GlobalExceptionHandler {
                 error = true,
                 code = ResponseCode.SNACKBAR_ERROR,
                 message = firstMessage,
+            )
+        )
+    }
+
+    /**
+     * 요청 본문을 읽지 못한 경우 — 깨진 JSON, enum 값 오타, **날짜 포맷 불일치** 등.
+     *
+     * 이 핸들러가 없으면 [handleUncaught] 로 떨어져 **HTTP 500 + code 500** 이 나간다.
+     * ADR-0002 규약상 클라이언트 입력 문제는 비즈니스 에러(HTTP 200 + code 700)여야 한다.
+     *
+     * 2026-07-31 challenge-create #7 통합 검증에서 실측으로 발견했다:
+     * ```
+     * {"opponentId":}              → HTTP 500 / code 500
+     * {"deadlineType":"YESTERDAY"} → HTTP 500 / code 500
+     * ```
+     *
+     * **ADR-0010 에서 특히 중요해졌다** — 요청 본문에 `"yyyy-MM-dd HH:mm:ss"` 문자열이 들어오기
+     * 시작하면 포맷이 틀린 날짜가 정확히 이 경로를 탄다. 500 으로 나가면 모바일이 비즈니스 에러로
+     * 처리하지 못하고 사용자는 "서버 오류가 발생했습니다" 만 보게 된다.
+     *
+     * 원인 메시지는 Jackson 내부 문구(영문 + 클래스명)라 **사용자에게 노출하지 않는다** —
+     * 모바일이 `message` 를 가공 없이 화면에 띄우기 때문이다 (challenge-create 계약 "공통 규약").
+     * 진단 정보는 로그로만 남긴다.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException::class)
+    fun handleNotReadable(e: HttpMessageNotReadableException): ResponseEntity<BaseResponse> {
+        log.warn("요청 본문 파싱 실패: {}", e.mostSpecificCause.message)
+        return ResponseEntity.ok(
+            BaseResponse(
+                error = true,
+                code = ResponseCode.SNACKBAR_ERROR,
+                message = "요청 형식이 올바르지 않습니다",
             )
         )
     }

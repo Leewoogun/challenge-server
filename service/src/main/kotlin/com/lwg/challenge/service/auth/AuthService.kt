@@ -17,6 +17,7 @@ import com.lwg.challenge.domain.user.UserStatus
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.time.Clock
 import java.time.LocalDateTime
 
 /**
@@ -36,6 +37,7 @@ class AuthService(
     private val kakaoAuthPort: KakaoAuthPort,
     private val userRepository: UserRepository,
     private val jwtTokenProvider: JwtTokenProvider,
+    private val clock: Clock,
 ) {
 
     private val log = LoggerFactory.getLogger(AuthService::class.java)
@@ -56,7 +58,7 @@ class AuthService(
         val profileImageUrl: String? = kakaoUser.profileImageUrl
 
         val existing: User? = userRepository.findByKakaoId(kakaoUser.kakaoId)
-        val now = LocalDateTime.now()
+        val now = LocalDateTime.now(clock)
 
         val (saved: User, isNewUser: Boolean) = if (existing == null) {
             val newUser = User(
@@ -96,7 +98,7 @@ class AuthService(
         userRepository.updateRefreshTokenHash(
             userId = userId,
             hash = RefreshTokenHasher.hash(refreshToken),
-            issuedAt = LocalDateTime.now(),
+            issuedAt = LocalDateTime.now(clock),
         )
 
         return LoginResult(
@@ -137,7 +139,7 @@ class AuthService(
         userRepository.updateRefreshTokenHash(
             userId = userId,
             hash = RefreshTokenHasher.hash(newRefreshToken),
-            issuedAt = LocalDateTime.now(),
+            issuedAt = LocalDateTime.now(clock),
         )
 
         log.info("refresh token rotated: userId={}", userId)

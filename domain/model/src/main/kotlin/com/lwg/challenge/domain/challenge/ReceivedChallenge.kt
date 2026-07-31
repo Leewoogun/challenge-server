@@ -12,8 +12,8 @@ import java.time.LocalDateTime
  * `opponentMission` 이 없는 이유: 이 목록은 `PENDING` 만 담는데, PENDING 구간에서는 정의상 항상 null 이다
  * (상대가 수락하며 입력한다 — challenge-create spec 결정 2).
  *
- * 시간 필드는 DB `TIMESTAMP` (tz 없음) 그대로. 프로젝트 규약상 **UTC 로 간주**하며 컨트롤러가
- * `toInstant(ZoneOffset.UTC)` 로 직렬화한다.
+ * 시간 필드는 DB `TIMESTAMP` (tz 없음) 그대로. 프로젝트 규약상 **KST 로 간주**하며 (ADR-0010)
+ * 컨트롤러가 변환 없이 `"yyyy-MM-dd HH:mm:ss"` 로 직렬화한다.
  */
 data class ReceivedChallenge(
     val challengeId: Long,

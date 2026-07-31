@@ -4,7 +4,8 @@ import com.fasterxml.jackson.annotation.JsonFormat
 import com.lwg.challenge.controller.common.BaseResponse
 import com.lwg.challenge.domain.verification.VerificationStatus
 import io.swagger.v3.oas.annotations.media.Schema
-import java.time.Instant
+import com.lwg.challenge.controller.common.WIRE_DATETIME
+import java.time.LocalDateTime
 
 /**
  * GET /api/v1/challenges/active 응답.
@@ -32,10 +33,10 @@ data class ActiveChallengeDto(
     val opponentNickname: String,
     @field:Schema(example = "책 30페이지 읽기")
     val opponentMission: String,
-    /** ISO-8601 UTC (예: `"2026-05-26T00:00:00Z"`). 모바일에서 상대 시간 변환. */
-    @field:Schema(example = "2026-05-26T00:00:00Z", description = "ISO-8601 UTC")
-    @JsonFormat(shape = JsonFormat.Shape.STRING)
-    val deadline: Instant,
+    /** KST 기준 (예: `"2026-05-26 00:00:00"`). 모바일에서 상대 시간 변환. ADR-0010. */
+    @field:Schema(example = "2026-05-26 00:00:00", description = "KST 기준 yyyy-MM-dd HH:mm:ss")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
+    val deadline: LocalDateTime,
     @field:Schema(example = "PENDING")
     val myVerificationStatus: VerificationStatus,
     @field:Schema(example = "VERIFIED")

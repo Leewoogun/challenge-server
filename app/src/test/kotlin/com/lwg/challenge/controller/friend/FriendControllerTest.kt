@@ -276,7 +276,7 @@ class FriendControllerTest {
             .andExpect(jsonPath("$.data.friends[0].id").value(100))
             .andExpect(jsonPath("$.data.friends[0].nickname").value("민수"))
             .andExpect(jsonPath("$.data.friends[0].profileImageUrl").value("https://cdn/u/100.jpg"))
-            .andExpect(jsonPath("$.data.friends[0].since").value("2026-06-20T12:34:56Z"))
+            .andExpect(jsonPath("$.data.friends[0].since").value("2026-06-20 12:34:56"))
     }
 
     @Test
@@ -311,7 +311,7 @@ class FriendControllerTest {
             .andExpect(jsonPath("$.data.requests[0].id").value(901))
             .andExpect(jsonPath("$.data.requests[0].fromUser.id").value(100))
             .andExpect(jsonPath("$.data.requests[0].fromUser.nickname").value("민수"))
-            .andExpect(jsonPath("$.data.requests[0].requestedAt").value("2026-06-24T18:00:00Z"))
+            .andExpect(jsonPath("$.data.requests[0].requestedAt").value("2026-06-24 18:00:00"))
     }
 
     @Test

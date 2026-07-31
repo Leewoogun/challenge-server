@@ -39,7 +39,6 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
-import java.time.ZoneOffset
 
 /**
  * 친구 시스템 컨트롤러 (spec-friend-add §5.1, api-contract-friend-add §1-7).
@@ -47,8 +46,8 @@ import java.time.ZoneOffset
  * 7개 endpoint 모두 Bearer JWT 필요. 인증은 SecurityFilterChain + JwtAuthenticationFilter.
  * 정상 케이스 principal 은 userId(Long).
  *
- * 시간 직렬화: friendships.created_at / accepted_at 은 DB LocalDateTime (timezone 없음). 백엔드는 UTC 로 저장 가정 →
- * Instant 변환 시 ZoneOffset.UTC 적용 (ActiveChallengeController 와 동일 패턴).
+ * 시간 직렬화 (ADR-0010): friendships.created_at / accepted_at 은 이미 KST `LocalDateTime` 이므로
+ * 변환 없이 그대로 `"yyyy-MM-dd HH:mm:ss"` 로 직렬화된다.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -201,7 +200,7 @@ class FriendController(
         id = id,
         nickname = nickname,
         profileImageUrl = profileImageUrl,
-        since = since.toInstant(ZoneOffset.UTC),
+        since = since,
     )
 
     private fun FriendRequest.toDto(): ReceivedFriendRequestItem = ReceivedFriendRequestItem(
@@ -211,6 +210,6 @@ class FriendController(
             nickname = fromUserNickname,
             profileImageUrl = fromUserProfileImageUrl,
         ),
-        requestedAt = requestedAt.toInstant(ZoneOffset.UTC),
+        requestedAt = requestedAt,
     )
 }

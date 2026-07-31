@@ -42,8 +42,8 @@ import java.time.LocalDateTime
  *
  * **이 테스트의 존재 이유는 대부분 "직렬화 고정"이다.** mobile-dev 가 지적한 두 가지가 여기서 막힌다:
  *  1. `challengeDate` 가 `[2026,7,28]` 배열로 나가면 모바일 `String` 파싱이 깨진다.
- *  2. `deadline` / `createdAt` 의 `Z` suffix 나 나노초 자릿수가 흔들리면, 모바일이 파싱 실패 시
- *     `Instant.DISTANT_PAST` 로 조용히 폴백해 "이미 마감된 카드" 가 되어 런타임에 드러나지 않는다.
+ *  2. `deadline` / `createdAt` 이 `"yyyy-MM-dd HH:mm:ss"` 를 벗어나면(=`T` 구분자나 나노초가 섞이면)
+ *     모바일 커스텀 파서가 실패한다 — ADR-0010 이후 관대하게 받아주지 않는다.
  * 그래서 jsonPath 로 **문자열 그대로** assert 한다.
  */
 @WebMvcTest(controllers = [ChallengeCommandController::class])
@@ -97,7 +97,7 @@ class ChallengeCommandControllerTest {
             // 🔴 배열 `[2026,7,28]` 회귀 방지 — 모바일은 String 으로 받는다.
             .andExpect(jsonPath("$.data.challengeDate").value("2026-07-28"))
             // 🔴 Z suffix 고정 — `+09:00` 이나 나노초가 섞이면 안 된다.
-            .andExpect(jsonPath("$.data.deadline").value("2026-07-28T15:00:00Z"))
+            .andExpect(jsonPath("$.data.deadline").value("2026-07-29 00:00:00"))
     }
 
     @Test
@@ -177,7 +177,7 @@ class ChallengeCommandControllerTest {
                 id = 101L,
                 status = ChallengeStatus.PENDING,
                 challengeDate = LocalDate.of(2026, 7, 29),
-                deadline = LocalDateTime.of(2026, 7, 29, 15, 0),
+                deadline = LocalDateTime.of(2026, 7, 30, 0, 0),
             ),
         )
 
@@ -188,7 +188,7 @@ class ChallengeCommandControllerTest {
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.challengeDate").value("2026-07-29"))
-            .andExpect(jsonPath("$.data.deadline").value("2026-07-29T15:00:00Z"))
+            .andExpect(jsonPath("$.data.deadline").value("2026-07-30 00:00:00"))
     }
 
     // ─── 2. GET /challenges/received ─────────────────────────────
@@ -205,7 +205,7 @@ class ChallengeCommandControllerTest {
                     challengerMission = "오늘 운동 1시간 하기",
                     betContent = "커피 사기",
                     challengeDate = LocalDate.of(2026, 7, 28),
-                    deadline = LocalDateTime.of(2026, 7, 28, 15, 0),
+                    deadline = LocalDateTime.of(2026, 7, 29, 0, 0),
                     // 나노초가 붙은 값 — 응답에서는 잘려야 한다.
                     createdAt = LocalDateTime.of(2026, 7, 28, 2, 11, 0, 123_456_000),
                 ),
@@ -224,9 +224,9 @@ class ChallengeCommandControllerTest {
             .andExpect(jsonPath("$.data.challenges[0].challengerMission").value("오늘 운동 1시간 하기"))
             .andExpect(jsonPath("$.data.challenges[0].betContent").value("커피 사기"))
             .andExpect(jsonPath("$.data.challenges[0].challengeDate").value("2026-07-28"))
-            .andExpect(jsonPath("$.data.challenges[0].deadline").value("2026-07-28T15:00:00Z"))
+            .andExpect(jsonPath("$.data.challenges[0].deadline").value("2026-07-29 00:00:00"))
             // 🔴 `.123456` 이 남으면 안 된다 (api-contract 확정: 초 단위 절삭).
-            .andExpect(jsonPath("$.data.challenges[0].createdAt").value("2026-07-28T02:11:00Z"))
+            .andExpect(jsonPath("$.data.challenges[0].createdAt").value("2026-07-28 02:11:00"))
     }
 
     @Test
@@ -241,7 +241,7 @@ class ChallengeCommandControllerTest {
                     challengerMission = "운동",
                     betContent = "커피",
                     challengeDate = LocalDate.of(2026, 7, 28),
-                    deadline = LocalDateTime.of(2026, 7, 28, 15, 0),
+                    deadline = LocalDateTime.of(2026, 7, 29, 0, 0),
                     createdAt = LocalDateTime.of(2026, 7, 28, 2, 11, 0),
                 ),
             ),
@@ -394,7 +394,7 @@ class ChallengeCommandControllerTest {
         id: Long,
         status: ChallengeStatus,
         challengeDate: LocalDate = LocalDate.of(2026, 7, 28),
-        deadline: LocalDateTime = LocalDateTime.of(2026, 7, 28, 15, 0),
+        deadline: LocalDateTime = LocalDateTime.of(2026, 7, 29, 0, 0),
     ) = Challenge(
         id = id,
         challengerId = meId,

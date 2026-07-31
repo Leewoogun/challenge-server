@@ -13,7 +13,9 @@ import java.time.LocalDateTime
  * - `opponentMission`은 상대가 수락하기 전까지 null (V5 마이그레이션에서 NOT NULL 완화).
  *   즉 `status == PENDING` 이면 항상 null, `IN_PROGRESS` 이상이면 항상 non-null 이다.
  *
- * `deadline` 은 DB 의 `TIMESTAMP` (no tz). 백엔드는 UTC 로 간주하여 저장/응답한다.
+ * `deadline` 은 DB 의 `TIMESTAMP` (no tz). **KST 로 간주**하여 저장/응답한다 (ADR-0010).
+ * offset 을 저장하지 않으므로 "이 값은 KST" 라는 약속이 유일한 기준이다 — 시각 취득은 반드시
+ * `Clock`(KST) 또는 `KstTime` 을 통해서만 한다.
  */
 data class Challenge(
     val id: Long?,

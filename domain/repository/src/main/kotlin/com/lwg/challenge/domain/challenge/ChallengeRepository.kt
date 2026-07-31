@@ -30,7 +30,7 @@ interface ChallengeRepository {
      * `EXPIRED` 로 전이시킬 배치가 아직 없다. challenge-create spec 리스크 항목).
      *
      * @param opponentId 조회자(= 도전장을 받은 사람) id
-     * @param now 마감 비교 기준 시각. **UTC LocalDateTime** — `challenges.deadline` 과 같은 축이어야 한다.
+     * @param now 마감 비교 기준 시각. **KST LocalDateTime** — `challenges.deadline` 과 같은 축이어야 한다 (ADR-0010).
      */
     fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge>
 

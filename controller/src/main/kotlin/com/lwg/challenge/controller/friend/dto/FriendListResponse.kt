@@ -2,7 +2,9 @@ package com.lwg.challenge.controller.friend.dto
 
 import com.lwg.challenge.controller.common.BaseResponse
 import io.swagger.v3.oas.annotations.media.Schema
-import java.time.Instant
+import com.fasterxml.jackson.annotation.JsonFormat
+import com.lwg.challenge.controller.common.WIRE_DATETIME
+import java.time.LocalDateTime
 
 /**
  * GET /api/v1/friends 응답 (BaseResponse 상속).
@@ -28,7 +30,8 @@ data class FriendItem(
     @field:Schema(example = "https://cdn.example.com/u/42.jpg")
     val profileImageUrl: String?,
     @field:Schema(description = "친구가 된 시각 (= friendships.accepted_at). ISO-8601 UTC.")
-    val since: Instant,
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
+    val since: LocalDateTime,
 )
 
 /**
@@ -50,7 +53,8 @@ data class ReceivedFriendRequestItem(
     val id: Long,
     val fromUser: FromUser,
     @field:Schema(description = "요청 시각 (= friendships.created_at). ISO-8601 UTC.")
-    val requestedAt: Instant,
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
+    val requestedAt: LocalDateTime,
 )
 
 @Schema(description = "요청 발신자 요약")

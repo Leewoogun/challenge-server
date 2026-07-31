@@ -8,6 +8,7 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import com.lwg.challenge.core.time.KstTime
 import java.time.LocalDateTime
 
 /**
@@ -37,7 +38,7 @@ class FriendshipEntity(
     var status: String,
 
     @Column(name = "created_at", nullable = false, updatable = false)
-    var createdAt: LocalDateTime = LocalDateTime.now(),
+    var createdAt: LocalDateTime = KstTime.now(),
 
     @Column(name = "accepted_at")
     var acceptedAt: LocalDateTime? = null,

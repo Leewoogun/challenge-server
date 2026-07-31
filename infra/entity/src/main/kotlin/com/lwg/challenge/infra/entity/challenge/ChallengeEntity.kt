@@ -10,6 +10,7 @@ import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import java.time.LocalDate
+import com.lwg.challenge.core.time.KstTime
 import java.time.LocalDateTime
 
 /**
@@ -56,7 +57,7 @@ class ChallengeEntity(
     var result: String? = null,
 
     @Column(name = "created_at", nullable = false, updatable = false)
-    var createdAt: LocalDateTime = LocalDateTime.now(),
+    var createdAt: LocalDateTime = KstTime.now(),
 
     @Column(name = "completed_at")
     var completedAt: LocalDateTime? = null,

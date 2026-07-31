@@ -6,6 +6,7 @@ import jakarta.persistence.Entity
 import jakarta.persistence.Id
 import jakarta.persistence.PreUpdate
 import jakarta.persistence.Table
+import com.lwg.challenge.core.time.KstTime
 import java.time.LocalDateTime
 
 /**
@@ -40,12 +41,12 @@ class UserRecordEntity(
     var maxStreak: Int = 0,
 
     @Column(name = "updated_at", nullable = false)
-    var updatedAt: LocalDateTime = LocalDateTime.now(),
+    var updatedAt: LocalDateTime = KstTime.now(),
 ) {
 
     @PreUpdate
     fun preUpdate() {
-        updatedAt = LocalDateTime.now()
+        updatedAt = KstTime.now()
     }
 
     fun toDomain(): UserRecord = UserRecord(

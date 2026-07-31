@@ -20,19 +20,17 @@ import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
-import java.time.Instant
 import java.time.LocalDateTime
-import java.time.ZoneOffset
 
 /**
  * 챌린지 신청 / 수락 / 거절 / 취소 비즈니스 로직 (challenge-create T-B3).
  *
  * 읽기 전용 조회는 [ActiveChallengeService] (home-feed) 가 담당하고, 이 서비스는 **쓰기 + 받은 도전장 목록**만 다룬다.
  *
- * ## 시간 축
- * `challenges.deadline` / `created_at` 은 timezone 없는 `TIMESTAMP` 이고 프로젝트 전체가 이를 **UTC 로 간주**한다.
- * 반면 챌린지의 "하루" 는 **KST 기준**으로 끊는다 ([KstDeadlineCalculator]). 두 축이 섞이면 자정 근처에서
- * 하루가 어긋나므로, 이 클래스는 [Clock] 하나만 진실의 원천으로 삼고 나머지 변환을 계산기에 위임한다.
+ * ## 시간 축 (ADR-0010)
+ * `challenges.deadline` / `created_at` 은 timezone 없는 `TIMESTAMP` 이고 프로젝트 전체가 이를 **KST 로 간주**한다.
+ * 챌린지의 "하루" 도 KST 로 끊으므로 **축이 하나뿐이고 변환이 없다.**
+ * 주입된 [Clock] 이 KST 라 `LocalDateTime.now(clock)` 이 곧 저장 값이다.
  *
  * ## 에러 코드
  * api-contract 확정 배분:
@@ -87,7 +85,7 @@ class ChallengeCommandService(
             throw SnackbarException(MSG_NOT_FRIEND)
         }
 
-        val now: Instant = clock.instant()
+        val now: LocalDateTime = nowKst()
         val schedule: ChallengeSchedule = KstDeadlineCalculator.calculate(deadlineType, now)
 
         // 사전 검사 — 양방향. 상대가 나에게 이미 건 경우도 중복이다.
@@ -104,7 +102,7 @@ class ChallengeCommandService(
             deadline = schedule.deadline,
             status = ChallengeStatus.PENDING,
             result = null,
-            createdAt = now.atZone(ZoneOffset.UTC).toLocalDateTime(),
+            createdAt = now,
             completedAt = null,
         )
 
@@ -127,7 +125,7 @@ class ChallengeCommandService(
      */
     @Transactional(readOnly = true)
     fun listReceived(me: Long): List<ReceivedChallenge> =
-        challengeRepository.findReceivedPending(me, nowUtc())
+        challengeRepository.findReceivedPending(me, nowKst())
 
     // ─── 3. 수락 ─────────────────────────────────────────────────
 
@@ -153,7 +151,7 @@ class ChallengeCommandService(
             ),
         )
 
-        val createdAt = nowUtc()
+        val createdAt = nowKst()
         // uq_verifications_challenge_user 가 중복 수락의 안전망. saveAllAndFlush 라 위반이 여기서 잡힌다.
         try {
             verificationRepository.saveAllAndFlush(
@@ -231,7 +229,7 @@ class ChallengeCommandService(
         if (challenge.status != ChallengeStatus.PENDING) {
             throw OneButtonDialogException(MSG_ALREADY_HANDLED)
         }
-        if (KstDeadlineCalculator.isExpired(challenge.deadline, clock.instant())) {
+        if (KstDeadlineCalculator.isExpired(challenge.deadline, nowKst())) {
             throw OneButtonDialogException(MSG_EXPIRED)
         }
         return challenge
@@ -289,9 +287,13 @@ class ChallengeCommandService(
             createdAt = createdAt,
         )
 
-    /** DB `TIMESTAMP` 축(UTC)에 맞춘 현재 시각. */
-    private fun nowUtc(): LocalDateTime =
-        clock.instant().atZone(ZoneOffset.UTC).toLocalDateTime()
+    /**
+     * 현재 KST 벽시계 시각. `clock` 빈이 KST 이므로 그대로 DB 저장 축과 일치한다 (ADR-0010).
+     *
+     * 예전에는 `clock.instant().atZone(UTC)` 로 UTC 벽시계를 만들었는데, 그게 레포의 나머지
+     * 코드(엔티티 기본값 = JVM 기본 KST)와 9시간 어긋난 원인이었다.
+     */
+    private fun nowKst(): LocalDateTime = LocalDateTime.now(clock)
 
     companion object {
         /** 미션 / 내기 최대 길이 (trim 후). api-contract 확정값. */

@@ -10,6 +10,7 @@ import jakarta.persistence.Id
 import jakarta.persistence.PrePersist
 import jakarta.persistence.PreUpdate
 import jakarta.persistence.Table
+import com.lwg.challenge.core.time.KstTime
 import java.time.LocalDateTime
 
 /**
@@ -48,10 +49,10 @@ class UserEntity(
     var status: String = UserStatus.ACTIVE.name,
 
     @Column(name = "created_at", nullable = false, updatable = false)
-    var createdAt: LocalDateTime = LocalDateTime.now(),
+    var createdAt: LocalDateTime = KstTime.now(),
 
     @Column(name = "updated_at", nullable = false)
-    var updatedAt: LocalDateTime = LocalDateTime.now(),
+    var updatedAt: LocalDateTime = KstTime.now(),
 
     @Column(name = "refresh_token_hash", length = 64)
     var refreshTokenHash: String? = null,
@@ -62,14 +63,14 @@ class UserEntity(
 
     @PrePersist
     fun prePersist() {
-        val now = LocalDateTime.now()
+        val now = KstTime.now()
         if (createdAt == LocalDateTime.MIN) createdAt = now
         updatedAt = now
     }
 
     @PreUpdate
     fun preUpdate() {
-        updatedAt = LocalDateTime.now()
+        updatedAt = KstTime.now()
     }
 
     fun toDomain(): User = User(

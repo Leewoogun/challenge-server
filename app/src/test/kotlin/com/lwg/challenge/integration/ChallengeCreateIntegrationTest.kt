@@ -2,6 +2,7 @@ package com.lwg.challenge.integration
 
 import com.lwg.challenge.core.auth.JwtTokenProvider
 import com.lwg.challenge.core.challenge.KstDeadlineCalculator
+import com.lwg.challenge.core.time.KstTime
 import com.lwg.challenge.domain.challenge.ChallengeStatus
 import com.lwg.challenge.domain.common.ResponseCode
 import com.lwg.challenge.domain.friend.FriendshipStatus
@@ -36,7 +37,6 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPat
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.testcontainers.DockerClientFactory
 import org.testcontainers.containers.PostgreSQLContainer
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -156,9 +156,9 @@ class ChallengeCreateIntegrationTest {
         assertEquals(friend.id, row.opponentId)
 
         // KST 환산 — challengeDate 는 KST 오늘, deadline 은 그 날의 KST 자정을 UTC 로 옮긴 값.
-        val expectedDate = Instant.now().atZone(KstDeadlineCalculator.KST).toLocalDate()
+        val expectedDate = KstTime.today()
         assertEquals(expectedDate, row.challengeDate)
-        assertEquals(KstDeadlineCalculator.endOfKstDayInUtc(expectedDate), row.deadline)
+        assertEquals(KstDeadlineCalculator.endOfDay(expectedDate), row.deadline)
 
         // 응답 JSON 의 날짜가 평문 ISO date 인지 (모바일이 String 으로 받는다).
         val body = result.response.contentAsString
@@ -176,9 +176,9 @@ class ChallengeCreateIntegrationTest {
             .andExpect(status().isOk)
 
         val row = challengeJpaRepository.findAll().single()
-        val kstTomorrow = Instant.now().atZone(KstDeadlineCalculator.KST).toLocalDate().plusDays(1)
+        val kstTomorrow = KstTime.today().plusDays(1)
         assertEquals(kstTomorrow, row.challengeDate)
-        assertEquals(KstDeadlineCalculator.endOfKstDayInUtc(kstTomorrow), row.deadline)
+        assertEquals(KstDeadlineCalculator.endOfDay(kstTomorrow), row.deadline)
     }
 
     @Test
@@ -239,7 +239,7 @@ class ChallengeCreateIntegrationTest {
             opponentId = me.id!!,
             status = ChallengeStatus.PENDING,
             challengeDate = LocalDate.now().minusDays(2),
-            deadline = LocalDateTime.now(ZoneOffset.UTC).minusHours(1),
+            deadline = KstTime.now().minusHours(1),
         )
 
         mockMvc.perform(
@@ -366,7 +366,7 @@ class ChallengeCreateIntegrationTest {
             opponentId = me.id!!,
             status = ChallengeStatus.PENDING,
             challengeDate = LocalDate.now().minusDays(2),
-            deadline = LocalDateTime.now(ZoneOffset.UTC).minusHours(1),
+            deadline = KstTime.now().minusHours(1),
         )
 
         accept(me.id!!, seeded.id!!, "책")
@@ -502,7 +502,7 @@ class ChallengeCreateIntegrationTest {
                     deadline = endOfDay(date),
                     status = ChallengeStatus.PENDING.name,
                     result = null,
-                    createdAt = LocalDateTime.now(ZoneOffset.UTC),
+                    createdAt = KstTime.now(),
                     completedAt = null,
                 ),
             )
@@ -549,15 +549,15 @@ class ChallengeCreateIntegrationTest {
                 requesterId = me.id!!,
                 receiverId = friend.id!!,
                 status = FriendshipStatus.ACCEPTED.name,
-                createdAt = LocalDateTime.now(ZoneOffset.UTC),
-                acceptedAt = LocalDateTime.now(ZoneOffset.UTC),
+                createdAt = KstTime.now(),
+                acceptedAt = KstTime.now(),
             ),
         )
         return me to friend
     }
 
     private fun newUser(kakaoId: Long, nickname: String): UserEntity {
-        val now = LocalDateTime.now(ZoneOffset.UTC)
+        val now = KstTime.now()
         return userJpaRepository.save(
             UserEntity(
                 id = null,
@@ -592,13 +592,13 @@ class ChallengeCreateIntegrationTest {
             deadline = deadline,
             status = status.name,
             result = null,
-            createdAt = LocalDateTime.now(ZoneOffset.UTC),
+            createdAt = KstTime.now(),
             completedAt = null,
         ),
     )
 
     private fun endOfDay(date: LocalDate): LocalDateTime =
-        KstDeadlineCalculator.endOfKstDayInUtc(date)
+        KstDeadlineCalculator.endOfDay(date)
 
     private fun createChallenge(
         me: Long,

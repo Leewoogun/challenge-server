@@ -29,7 +29,6 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
-import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 
 /**
@@ -41,9 +40,8 @@ import java.time.temporal.ChronoUnit
  * 인증은 SecurityFilterChain `.anyRequest().authenticated()` + `JwtAuthenticationFilter` 담당.
  * 정상 케이스 principal 은 userId(Long).
  *
- * **시간 직렬화**: DB 의 `LocalDateTime` 은 tz 없는 UTC 기준 값이라 `toInstant(ZoneOffset.UTC)` 로 변환한다.
- * `createdAt` 은 `LocalDateTime.now()` 유래라 나노초가 붙으므로 **초 단위로 절삭**해 내보낸다 —
- * 모바일이 `Instant.parse()` 실패 시 `Instant.DISTANT_PAST` 로 조용히 폴백하기 때문에 표기를 고정한다.
+ * **시간 직렬화 (ADR-0010)**: DB 의 `LocalDateTime` 이 이미 KST 라 **변환 없이 그대로** 내보낸다.
+ * `createdAt` 만 나노초가 붙으므로 **초 단위로 절삭**한다 — 계약이 밀리초·나노초를 금지한다.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -75,7 +73,7 @@ class ChallengeCommandController(
                 challengeId = created.id ?: error("저장된 challenge 의 id 가 null 일 수 없습니다"),
                 status = created.status,
                 challengeDate = created.challengeDate,
-                deadline = created.deadline.toInstant(ZoneOffset.UTC),
+                deadline = created.deadline,
             ),
         )
     }
@@ -176,9 +174,9 @@ class ChallengeCommandController(
         challengerMission = challengerMission,
         betContent = betContent,
         challengeDate = challengeDate,
-        deadline = deadline.toInstant(ZoneOffset.UTC),
+        deadline = deadline,
         // 나노초 자릿수가 섞이지 않도록 초 단위 절삭 (api-contract 확정).
-        createdAt = createdAt.toInstant(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS),
+        createdAt = createdAt.truncatedTo(ChronoUnit.SECONDS),
     )
 
     companion object {

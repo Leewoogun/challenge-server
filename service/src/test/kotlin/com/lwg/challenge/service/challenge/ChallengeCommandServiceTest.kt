@@ -29,7 +29,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneOffset
+import com.lwg.challenge.core.time.KstTime
 
 /**
  * ChallengeCommandService 단위 테스트 (challenge-create T-B4).
@@ -45,9 +45,9 @@ import java.time.ZoneOffset
  */
 class ChallengeCommandServiceTest {
 
-    // KST 2026-07-28 14:00 — api-contract 예시와 같은 시각.
-    private val fixedNow: Instant = Instant.parse("2026-07-28T05:00:00Z")
-    private val clock: Clock = Clock.fixed(fixedNow, ZoneOffset.UTC)
+    // KST 2026-07-28 14:00. ADR-0010 이후 clock 자체가 KST 라 벽시계 = 저장값이다.
+    private val fixedNow: Instant = Instant.parse("2026-07-28T05:00:00Z") // = KST 14:00
+    private val clock: Clock = Clock.fixed(fixedNow, KstTime.ZONE)
 
     private val me = 1L
     private val friend = 2L
@@ -95,8 +95,8 @@ class ChallengeCommandServiceTest {
         assertEquals(ChallengeStatus.PENDING, created.status)
         assertNull(created.opponentMission, "생성 직후 opponentMission 은 null 이어야 한다")
         assertEquals(LocalDate.of(2026, 7, 28), created.challengeDate)
-        // KST 07-29 00:00 == 07-28T15:00Z
-        assertEquals(LocalDateTime.of(2026, 7, 28, 15, 0), created.deadline)
+        // ADR-0010: deadline 은 KST 벽시계 그대로 — 07-29 00:00 (예전에는 07-28T15:00Z 로 저장됐다)
+        assertEquals(LocalDateTime.of(2026, 7, 29, 0, 0), created.deadline)
         assertEquals(me, created.challengerId)
         assertEquals(friend, created.opponentId)
         assertNull(created.result)
@@ -109,7 +109,7 @@ class ChallengeCommandServiceTest {
         val created = service().create(me, friend, "운동", "커피", DeadlineType.TOMORROW)
 
         assertEquals(LocalDate.of(2026, 7, 29), created.challengeDate)
-        assertEquals(LocalDateTime.of(2026, 7, 29, 15, 0), created.deadline)
+        assertEquals(LocalDateTime.of(2026, 7, 30, 0, 0), created.deadline)
     }
 
     @Test
@@ -404,8 +404,8 @@ class ChallengeCommandServiceTest {
         seedUsersAndFriendship()
         val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
 
-        // 마감(07-28T15:00Z) 1초 후로 시계를 옮긴다.
-        val later = Clock.fixed(Instant.parse("2026-07-28T15:00:01Z"), ZoneOffset.UTC)
+        // 마감(KST 07-29 00:00) 1초 후로 시계를 옮긴다. 07-28T15:00:01Z == KST 07-29 00:00:01
+        val later = Clock.fixed(Instant.parse("2026-07-28T15:00:01Z"), KstTime.ZONE)
         val e = assertThrows<BusinessException> { service(later).accept(me, id, "책") }
 
         assertEquals(ResponseCode.ONE_BUTTON_DIALOG_ERROR, e.code)
@@ -417,7 +417,7 @@ class ChallengeCommandServiceTest {
         seedUsersAndFriendship()
         val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
 
-        val atDeadline = Clock.fixed(Instant.parse("2026-07-28T15:00:00Z"), ZoneOffset.UTC)
+        val atDeadline = Clock.fixed(Instant.parse("2026-07-28T15:00:00Z"), KstTime.ZONE) // KST 07-29 00:00 정각
         val accepted = service(atDeadline).accept(me, id, "책")
 
         assertEquals(ChallengeStatus.IN_PROGRESS, accepted.status)
@@ -544,7 +544,7 @@ class ChallengeCommandServiceTest {
         seedUsersAndFriendship()
         val id = service().create(me, friend, "운동", "커피", DeadlineType.TODAY).id!!
 
-        val later = Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC)
+        val later = Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), KstTime.ZONE)
         service(later).cancel(me, id)
 
         assertTrue(challenges.all().isEmpty())
@@ -560,7 +560,7 @@ class ChallengeCommandServiceTest {
         assertEquals(1, service().listReceived(me).size)
 
         // 마감 후에는 응답에서 빠진다 (DB status 는 PENDING 그대로 — lazy expiry).
-        val later = Clock.fixed(Instant.parse("2026-07-28T15:00:01Z"), ZoneOffset.UTC)
+        val later = Clock.fixed(Instant.parse("2026-07-28T15:00:01Z"), KstTime.ZONE)
         assertEquals(0, service(later).listReceived(me).size)
         assertEquals(ChallengeStatus.PENDING, challenges.all().single().status)
     }
@@ -603,7 +603,7 @@ class ChallengeCommandServiceTest {
         opponentMission = if (status == ChallengeStatus.IN_PROGRESS) "상대 미션" else null,
         betContent = "기존 내기",
         challengeDate = challengeDate,
-        deadline = KstDeadlineCalculator.endOfKstDayInUtc(challengeDate),
+        deadline = KstDeadlineCalculator.endOfDay(challengeDate),
         status = status,
         result = null,
         createdAt = LocalDateTime.of(2026, 7, 28, 0, 0),

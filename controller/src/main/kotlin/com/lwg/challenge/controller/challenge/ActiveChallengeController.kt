@@ -13,7 +13,6 @@ import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
-import java.time.ZoneOffset
 
 /**
  * 진행 중 챌린지 조회 컨트롤러.
@@ -60,8 +59,8 @@ class ActiveChallengeController(
         myMission = myMission,
         opponentNickname = opponentNickname,
         opponentMission = opponentMission,
-        // deadline 은 LocalDateTime (DB TIMESTAMP, tz 없음). 백엔드는 UTC 로 저장 가정 → 그대로 Instant 변환.
-        deadline = deadline.toInstant(ZoneOffset.UTC),
+        // deadline 은 이미 KST LocalDateTime (ADR-0010) — 변환 없이 그대로 직렬화된다.
+        deadline = deadline,
         myVerificationStatus = myVerificationStatus,
         opponentVerificationStatus = opponentVerificationStatus,
         bet = bet,

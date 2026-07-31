@@ -12,6 +12,7 @@ import com.lwg.challenge.domain.user.UserStatus
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.time.Clock
 import java.time.LocalDateTime
 
 /**
@@ -26,6 +27,7 @@ import java.time.LocalDateTime
 class FriendService(
     private val friendshipRepository: FriendshipRepository,
     private val userRepository: UserRepository,
+    private val clock: Clock,
 ) {
 
     // ─── 검색 ────────────────────────────────────────────────────
@@ -103,7 +105,7 @@ class FriendService(
         // saveAndFlush 로 즉시 flush — UNIQUE(requester_id, receiver_id) 위반이 try/catch 안에서
         // DataIntegrityViolationException 으로 잡힌다. save 만 호출하면 flush 가 트랜잭션 commit
         // 시점으로 미뤄져 catch 블록 밖에서 터지므로 500 으로 변환된다.
-        val now = LocalDateTime.now()
+        val now = LocalDateTime.now(clock)
         val toInsert = Friendship(
             id = null,
             requesterId = me,
@@ -137,7 +139,7 @@ class FriendService(
         }
         val updated = row.copy(
             status = FriendshipStatus.ACCEPTED,
-            acceptedAt = LocalDateTime.now(),
+            acceptedAt = LocalDateTime.now(clock),
         )
         return friendshipRepository.save(updated)
     }
