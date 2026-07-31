@@ -10,6 +10,8 @@ import java.time.LocalDateTime
  *
  * - `id == null` ⇒ 신규.
  * - `result`는 챌린지가 COMPLETED 되기 전까지 null.
+ * - `opponentMission`은 상대가 수락하기 전까지 null (V5 마이그레이션에서 NOT NULL 완화).
+ *   즉 `status == PENDING` 이면 항상 null, `IN_PROGRESS` 이상이면 항상 non-null 이다.
  *
  * `deadline` 은 DB 의 `TIMESTAMP` (no tz). 백엔드는 UTC 로 간주하여 저장/응답한다.
  */
@@ -18,7 +20,7 @@ data class Challenge(
     val challengerId: Long,
     val opponentId: Long,
     val challengerMission: String,
-    val opponentMission: String,
+    val opponentMission: String?,
     val betContent: String,
     val challengeDate: LocalDate,
     val deadline: LocalDateTime,

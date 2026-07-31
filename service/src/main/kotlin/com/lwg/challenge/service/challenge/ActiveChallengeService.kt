@@ -46,8 +46,12 @@ class ActiveChallengeService(
             val challengeId: Long = c.id ?: error("영속화된 challenge 의 id 는 null 일 수 없습니다")
             val isChallenger: Boolean = c.challengerId == userId
             val opponentUserId: Long = if (isChallenger) c.opponentId else c.challengerId
-            val myMission: String = if (isChallenger) c.challengerMission else c.opponentMission
-            val opponentMission: String = if (isChallenger) c.opponentMission else c.challengerMission
+            // opponentMission 은 V5 이후 nullable — 상대가 수락하며 채운다.
+            // 여기서 다루는 챌린지는 IN_PROGRESS(= 수락 완료) 뿐이라 항상 non-null 이지만,
+            // 수동 시드 등으로 비어 있는 row 가 섞여도 응답이 깨지지 않도록 빈 문자열로 대체한다.
+            val acceptedOpponentMission: String = c.opponentMission.orEmpty()
+            val myMission: String = if (isChallenger) c.challengerMission else acceptedOpponentMission
+            val opponentMission: String = if (isChallenger) acceptedOpponentMission else c.challengerMission
             val opponentNickname: String = opponentsById[opponentUserId]?.nickname ?: UNKNOWN_OPPONENT
             val myStatus: VerificationStatus =
                 verificationStatusByKey[challengeId to userId] ?: VerificationStatus.PENDING

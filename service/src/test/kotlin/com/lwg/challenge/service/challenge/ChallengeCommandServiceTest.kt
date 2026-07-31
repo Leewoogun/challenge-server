@@ -1,0 +1,741 @@
+package com.lwg.challenge.service.challenge
+
+import com.lwg.challenge.core.challenge.DeadlineType
+import com.lwg.challenge.core.challenge.KstDeadlineCalculator
+import com.lwg.challenge.domain.challenge.Challenge
+import com.lwg.challenge.domain.challenge.ChallengeRepository
+import com.lwg.challenge.domain.challenge.ChallengeStatus
+import com.lwg.challenge.domain.challenge.ReceivedChallenge
+import com.lwg.challenge.domain.common.ResponseCode
+import com.lwg.challenge.domain.common.exception.BusinessException
+import com.lwg.challenge.domain.friend.Friend
+import com.lwg.challenge.domain.friend.FriendRequest
+import com.lwg.challenge.domain.friend.Friendship
+import com.lwg.challenge.domain.friend.FriendshipRepository
+import com.lwg.challenge.domain.friend.FriendshipStatus
+import com.lwg.challenge.domain.friend.UserSearchResult
+import com.lwg.challenge.domain.user.User
+import com.lwg.challenge.domain.user.UserRepository
+import com.lwg.challenge.domain.user.UserStatus
+import com.lwg.challenge.domain.verification.Verification
+import com.lwg.challenge.domain.verification.VerificationRepository
+import com.lwg.challenge.domain.verification.VerificationStatus
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import java.time.Clock
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+
+/**
+ * ChallengeCommandService 단위 테스트 (challenge-create T-B4).
+ *
+ * Spring 컨텍스트 / DB 없이 in-memory fake repository 로 검증한다. Mockito 대신 fake 를 쓰는 이유:
+ * 이 서비스의 핵심은 "여러 저장소에 걸친 상태 전이" 라서, 호출 검증(verify)보다 **저장된 결과**를
+ * 그대로 읽어 확인하는 편이 회귀를 훨씬 잘 잡는다 (수락 시 verifications 2건 같은 것).
+ *
+ * 시각은 `Clock.fixed` 로 고정 — 자정 경계·마감 경과 분기를 결정적으로 재현하기 위함.
+ *
+ * 커버 범위: KST 자정 환산 반영, 양방향 중복 판정(+메시지 분기), 권한, 상태, 마감, 길이/trim,
+ * 수락 시 verifications 2건 생성, 취소 물리 삭제.
+ */
+class ChallengeCommandServiceTest {
+
+    // KST 2026-07-28 14:00 — api-contract 예시와 같은 시각.
+    private val fixedNow: Instant = Instant.parse("2026-07-28T05:00:00Z")
+    private val clock: Clock = Clock.fixed(fixedNow, ZoneOffset.UTC)
+
+    private val me = 1L
+    private val friend = 2L
+    private val stranger = 3L
+
+    // ─── fakes ───────────────────────────────────────────────────
+
+    private val challenges = FakeChallengeRepository()
+    private val friendships = FakeFriendshipRepository()
+    private val users = FakeUserRepository()
+    private val verifications = FakeVerificationRepository()
+
+    private fun service(clock: Clock = this.clock) = ChallengeCommandService(
+        challengeRepository = challenges,
+        friendshipRepository = friendships,
+        userRepository = users,
+        verificationRepository = verifications,
+        clock = clock,
+    )
+
+    private fun seedUsersAndFriendship() {
+        users.put(user(me, "나"))
+        users.put(user(friend, "민수"))
+        users.put(user(stranger, "남남"))
+        friendships.put(
+            Friendship(
+                id = 100L,
+                requesterId = me,
+                receiverId = friend,
+                status = FriendshipStatus.ACCEPTED,
+                createdAt = LocalDateTime.of(2026, 7, 1, 0, 0),
+                acceptedAt = LocalDateTime.of(2026, 7, 1, 0, 0),
+            ),
+        )
+    }
+
+    // ─── create: 정상 ────────────────────────────────────────────
+
+    @Test
+    fun `create - KST 자정 환산이 반영되고 PENDING + opponentMission null 로 생성된다`() {
+        seedUsersAndFriendship()
+
+        val created = service().create(me, friend, "운동 1시간", "커피 사기", DeadlineType.TODAY)
+
+        assertEquals(ChallengeStatus.PENDING, created.status)
+        assertNull(created.opponentMission, "생성 직후 opponentMission 은 null 이어야 한다")
+        assertEquals(LocalDate.of(2026, 7, 28), created.challengeDate)
+        // KST 07-29 00:00 == 07-28T15:00Z
+        assertEquals(LocalDateTime.of(2026, 7, 28, 15, 0), created.deadline)
+        assertEquals(me, created.challengerId)
+        assertEquals(friend, created.opponentId)
+        assertNull(created.result)
+    }
+
+    @Test
+    fun `create - TOMORROW 는 challengeDate 가 내일이다`() {
+        seedUsersAndFriendship()
+
+        val created = service().create(me, friend, "운동", "커피", DeadlineType.TOMORROW)
+
+        assertEquals(LocalDate.of(2026, 7, 29), created.challengeDate)
+        assertEquals(LocalDateTime.of(2026, 7, 29, 15, 0), created.deadline)
+    }
+
+    @Test
+    fun `create - 미션과 내기는 trim 되어 저장된다`() {
+        seedUsersAndFriendship()
+
+        val created = service().create(me, friend, "  운동 1시간  ", "\t커피 사기\n", DeadlineType.TODAY)
+
+        assertEquals("운동 1시간", created.challengerMission)
+        assertEquals("커피 사기", created.betContent)
+    }
+
+    // ─── create: 검증 실패 ───────────────────────────────────────
+
+    @Test
+    fun `create - 본인에게는 걸 수 없다`() {
+        seedUsersAndFriendship()
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, me, "운동", "커피", DeadlineType.TODAY)
+        }
+        assertEquals(ResponseCode.SNACKBAR_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_SELF_CHALLENGE, e.message)
+    }
+
+    @Test
+    fun `create - 친구가 아니면 거부된다`() {
+        seedUsersAndFriendship()
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, stranger, "운동", "커피", DeadlineType.TODAY)
+        }
+        assertEquals(ResponseCode.SNACKBAR_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_NOT_FRIEND, e.message)
+    }
+
+    @Test
+    fun `create - PENDING 친구요청 상태는 친구가 아니다`() {
+        users.put(user(me, "나"))
+        users.put(user(friend, "민수"))
+        friendships.put(
+            Friendship(
+                id = 101L,
+                requesterId = me,
+                receiverId = friend,
+                status = FriendshipStatus.PENDING,
+                createdAt = LocalDateTime.of(2026, 7, 1, 0, 0),
+                acceptedAt = null,
+            ),
+        )
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "운동", "커피", DeadlineType.TODAY)
+        }
+        assertEquals(ChallengeCommandService.MSG_NOT_FRIEND, e.message)
+    }
+
+    @Test
+    fun `create - 존재하지 않는 상대는 거부된다`() {
+        seedUsersAndFriendship()
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, 999L, "운동", "커피", DeadlineType.TODAY)
+        }
+        assertEquals(ChallengeCommandService.MSG_OPPONENT_NOT_FOUND, e.message)
+    }
+
+    @Test
+    fun `create - 탈퇴한 상대는 존재하지 않는 것으로 취급한다`() {
+        seedUsersAndFriendship()
+        users.put(user(friend, "민수", UserStatus.DELETED))
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "운동", "커피", DeadlineType.TODAY)
+        }
+        assertEquals(ChallengeCommandService.MSG_OPPONENT_NOT_FOUND, e.message)
+    }
+
+    @Test
+    fun `create - 미션이 공백뿐이면 거부된다`() {
+        seedUsersAndFriendship()
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "   ", "커피", DeadlineType.TODAY)
+        }
+        assertEquals(ChallengeCommandService.MSG_MISSION_LENGTH, e.message)
+    }
+
+    @Test
+    fun `create - 미션 100자는 통과하고 101자는 거부된다`() {
+        seedUsersAndFriendship()
+
+        val ok = service().create(me, friend, "가".repeat(100), "커피", DeadlineType.TODAY)
+        assertEquals(100, ok.challengerMission.length)
+
+        challenges.clear()
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "가".repeat(101), "커피", DeadlineType.TODAY)
+        }
+        assertEquals(ChallengeCommandService.MSG_MISSION_LENGTH, e.message)
+    }
+
+    @Test
+    fun `create - 내기 길이 위반은 미션과 다른 문구다`() {
+        seedUsersAndFriendship()
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "운동", "", DeadlineType.TODAY)
+        }
+        assertEquals(ChallengeCommandService.MSG_BET_LENGTH, e.message)
+    }
+
+    @Test
+    fun `create - trim 후 길이를 재므로 공백 패딩된 100자는 통과한다`() {
+        seedUsersAndFriendship()
+
+        val created = service().create(me, friend, "  " + "가".repeat(100) + "  ", "커피", DeadlineType.TODAY)
+
+        assertEquals(100, created.challengerMission.length)
+    }
+
+    // ─── create: 중복 판정 (양방향) ───────────────────────────────
+
+    @Test
+    fun `create - 내가 건 PENDING 이 있으면 중복이다`() {
+        seedUsersAndFriendship()
+        service().create(me, friend, "운동", "커피", DeadlineType.TODAY)
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "독서", "밥 사기", DeadlineType.TODAY)
+        }
+        assertEquals(ChallengeCommandService.MSG_DUPLICATE_OWN, e.message)
+    }
+
+    @Test
+    fun `create - 상대가 나에게 건 PENDING 도 중복이고 문구가 다르다`() {
+        seedUsersAndFriendship()
+        // 상대가 나에게 먼저 걸었다.
+        service().create(friend, me, "운동", "커피", DeadlineType.TODAY)
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "독서", "밥 사기", DeadlineType.TODAY)
+        }
+        // "진행 중" 이라고 하면 홈에서 아무것도 안 보여 혼란스럽다 → 받은 도전장으로 안내.
+        assertEquals(ChallengeCommandService.MSG_DUPLICATE_REVERSE, e.message)
+    }
+
+    @Test
+    fun `create - IN_PROGRESS 챌린지가 있으면 방향과 무관하게 중복이다`() {
+        seedUsersAndFriendship()
+        challenges.put(
+            challenge(
+                id = 50L,
+                challengerId = friend,
+                opponentId = me,
+                status = ChallengeStatus.IN_PROGRESS,
+                challengeDate = LocalDate.of(2026, 7, 28),
+            ),
+        )
+
+        val e = assertThrows<BusinessException> {
+            service().create(me, friend, "독서", "밥 사기", DeadlineType.TODAY)
+        }
+        // IN_PROGRESS 는 역방향이어도 PENDING 이 아니므로 "받은 도전장" 안내가 아니다.
+        assertEquals(ChallengeCommandService.MSG_DUPLICATE_OWN, e.message)
+    }
+
+    @Test
+    fun `create - REJECTED 는 중복이 아니라 재도전이 가능하다`() {
+        seedUsersAndFriendship()
+        challenges.put(
+            challenge(
+                id = 51L,
+                challengerId = me,
+                opponentId = friend,
+                status = ChallengeStatus.REJECTED,
+                challengeDate = LocalDate.of(2026, 7, 28),
+            ),
+        )
+
+        val created = service().create(me, friend, "독서", "밥 사기", DeadlineType.TODAY)
+
+        assertEquals(ChallengeStatus.PENDING, created.status)
+    }
+
+    @Test
+    fun `create - 날짜가 다르면 중복이 아니다 - 같은 친구에게 오늘과 내일 둘 다 가능`() {
+        seedUsersAndFriendship()
+        service().create(me, friend, "운동", "커피", DeadlineType.TODAY)
+
+        val tomorrow = service().create(me, friend, "독서", "밥 사기", DeadlineType.TOMORROW)
+
+        assertEquals(LocalDate.of(2026, 7, 29), tomorrow.challengeDate)
+        assertEquals(2, challenges.all().size)
+    }
+
+    @Test
+    fun `create - 다른 친구와는 같은 날 각각 걸 수 있다`() {
+        seedUsersAndFriendship()
+        val friend2 = 4L
+        users.put(user(friend2, "영희"))
+        friendships.put(
+            Friendship(
+                id = 102L, requesterId = friend2, receiverId = me,
+                status = FriendshipStatus.ACCEPTED,
+                createdAt = LocalDateTime.of(2026, 7, 1, 0, 0),
+                acceptedAt = LocalDateTime.of(2026, 7, 1, 0, 0),
+            ),
+        )
+        service().create(me, friend, "운동", "커피", DeadlineType.TODAY)
+
+        val second = service().create(me, friend2, "독서", "밥 사기", DeadlineType.TODAY)
+
+        assertEquals(ChallengeStatus.PENDING, second.status)
+        assertEquals(2, challenges.all().size)
+    }
+
+    // ─── accept ──────────────────────────────────────────────────
+
+    @Test
+    fun `accept - IN_PROGRESS 로 전이되고 opponentMission 이 채워진다`() {
+        seedUsersAndFriendship()
+        val created = service().create(friend, me, "운동 1시간", "커피 사기", DeadlineType.TODAY)
+        val id = created.id!!
+
+        val accepted = service().accept(me, id, "  책 30페이지  ")
+
+        assertEquals(ChallengeStatus.IN_PROGRESS, accepted.status)
+        assertEquals("책 30페이지", accepted.opponentMission)
+        assertEquals("운동 1시간", accepted.challengerMission)
+    }
+
+    @Test
+    fun `accept - verifications PENDING row 가 양측 2건 생성된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        service().accept(me, id, "책 30페이지")
+
+        val rows = verifications.all().filter { it.challengeId == id }
+        assertEquals(2, rows.size)
+        assertEquals(setOf(friend, me), rows.map { it.userId }.toSet())
+        assertTrue(rows.all { it.status == VerificationStatus.PENDING })
+        assertTrue(rows.all { it.photoUrl == null && it.verifiedAt == null })
+    }
+
+    @Test
+    fun `accept - 당사자가 아니면 거부된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        val e = assertThrows<BusinessException> { service().accept(stranger, id, "책") }
+
+        assertEquals(ResponseCode.SNACKBAR_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_NOT_MY_RECEIVED, e.message)
+    }
+
+    @Test
+    fun `accept - 챌린저 본인은 자기 도전장을 수락할 수 없다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        val e = assertThrows<BusinessException> { service().accept(friend, id, "책") }
+
+        assertEquals(ChallengeCommandService.MSG_NOT_MY_RECEIVED, e.message)
+    }
+
+    @Test
+    fun `accept - 이미 수락된 챌린지는 705 로 거부된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+        service().accept(me, id, "책 30페이지")
+
+        val e = assertThrows<BusinessException> { service().accept(me, id, "다시") }
+
+        assertEquals(ResponseCode.ONE_BUTTON_DIALOG_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_ALREADY_HANDLED, e.message)
+    }
+
+    @Test
+    fun `accept - 존재하지 않는 id 는 705 로 거부된다`() {
+        seedUsersAndFriendship()
+
+        val e = assertThrows<BusinessException> { service().accept(me, 9999L, "책") }
+
+        assertEquals(ResponseCode.ONE_BUTTON_DIALOG_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_NOT_FOUND, e.message)
+    }
+
+    @Test
+    fun `accept - 마감이 지나면 705 로 거부된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        // 마감(07-28T15:00Z) 1초 후로 시계를 옮긴다.
+        val later = Clock.fixed(Instant.parse("2026-07-28T15:00:01Z"), ZoneOffset.UTC)
+        val e = assertThrows<BusinessException> { service(later).accept(me, id, "책") }
+
+        assertEquals(ResponseCode.ONE_BUTTON_DIALOG_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_EXPIRED, e.message)
+    }
+
+    @Test
+    fun `accept - 마감 정각은 아직 수락할 수 있다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        val atDeadline = Clock.fixed(Instant.parse("2026-07-28T15:00:00Z"), ZoneOffset.UTC)
+        val accepted = service(atDeadline).accept(me, id, "책")
+
+        assertEquals(ChallengeStatus.IN_PROGRESS, accepted.status)
+    }
+
+    @Test
+    fun `accept - 권한 검사가 상태 검사보다 먼저다 - 남의 챌린지 상태를 흘리지 않는다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+        service().accept(me, id, "책 30페이지") // 이미 IN_PROGRESS
+
+        val e = assertThrows<BusinessException> { service().accept(stranger, id, "책") }
+
+        // "이미 처리된 챌린지예요" 가 나가면 제3자가 남의 챌린지 진행 여부를 알아낼 수 있다.
+        assertEquals(ChallengeCommandService.MSG_NOT_MY_RECEIVED, e.message)
+    }
+
+    @Test
+    fun `accept - 미션이 공백뿐이면 거부된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        val e = assertThrows<BusinessException> { service().accept(me, id, "  ") }
+
+        assertEquals(ChallengeCommandService.MSG_MISSION_LENGTH, e.message)
+    }
+
+    // ─── reject ──────────────────────────────────────────────────
+
+    @Test
+    fun `reject - REJECTED 로 전이되고 row 는 남는다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        val rejected = service().reject(me, id)
+
+        assertEquals(ChallengeStatus.REJECTED, rejected.status)
+        assertEquals(1, challenges.all().size)
+    }
+
+    @Test
+    fun `reject - 거절 후에는 같은 날 다시 도전할 수 있다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+        service().reject(me, id)
+
+        val retry = service().create(me, friend, "독서", "밥 사기", DeadlineType.TODAY)
+
+        assertEquals(ChallengeStatus.PENDING, retry.status)
+    }
+
+    @Test
+    fun `reject - 당사자가 아니면 거부된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+
+        val e = assertThrows<BusinessException> { service().reject(stranger, id) }
+
+        assertEquals(ChallengeCommandService.MSG_NOT_MY_RECEIVED, e.message)
+    }
+
+    @Test
+    fun `reject - 이미 처리된 챌린지는 705 로 거부된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+        service().reject(me, id)
+
+        val e = assertThrows<BusinessException> { service().reject(me, id) }
+
+        assertEquals(ResponseCode.ONE_BUTTON_DIALOG_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_ALREADY_HANDLED, e.message)
+    }
+
+    // ─── cancel ──────────────────────────────────────────────────
+
+    @Test
+    fun `cancel - 챌린저가 취소하면 물리 삭제된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(me, friend, "운동", "커피", DeadlineType.TODAY).id!!
+
+        service().cancel(me, id)
+
+        assertTrue(challenges.all().isEmpty())
+    }
+
+    @Test
+    fun `cancel - 취소 후 같은 날 다시 걸 수 있다`() {
+        seedUsersAndFriendship()
+        val id = service().create(me, friend, "운동", "커피", DeadlineType.TODAY).id!!
+        service().cancel(me, id)
+
+        val again = service().create(me, friend, "독서", "밥 사기", DeadlineType.TODAY)
+
+        assertEquals(ChallengeStatus.PENDING, again.status)
+    }
+
+    @Test
+    fun `cancel - 챌린저가 아니면 거부된다`() {
+        seedUsersAndFriendship()
+        val id = service().create(me, friend, "운동", "커피", DeadlineType.TODAY).id!!
+
+        // 받는 쪽(friend)이 취소를 시도.
+        val e = assertThrows<BusinessException> { service().cancel(friend, id) }
+
+        assertEquals(ResponseCode.SNACKBAR_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_NOT_MY_SENT, e.message)
+        assertEquals(1, challenges.all().size)
+    }
+
+    @Test
+    fun `cancel - 이미 수락된 챌린지는 취소할 수 없다`() {
+        seedUsersAndFriendship()
+        val id = service().create(me, friend, "운동", "커피", DeadlineType.TODAY).id!!
+        service().accept(friend, id, "책 30페이지")
+
+        val e = assertThrows<BusinessException> { service().cancel(me, id) }
+
+        assertEquals(ResponseCode.ONE_BUTTON_DIALOG_ERROR, e.code)
+        assertEquals(ChallengeCommandService.MSG_ALREADY_HANDLED, e.message)
+    }
+
+    @Test
+    fun `cancel - 마감이 지나도 내 도전장은 치울 수 있다`() {
+        seedUsersAndFriendship()
+        val id = service().create(me, friend, "운동", "커피", DeadlineType.TODAY).id!!
+
+        val later = Clock.fixed(Instant.parse("2026-07-29T00:00:00Z"), ZoneOffset.UTC)
+        service(later).cancel(me, id)
+
+        assertTrue(challenges.all().isEmpty())
+    }
+
+    // ─── listReceived ────────────────────────────────────────────
+
+    @Test
+    fun `listReceived - 마감 미경과 PENDING 만 반환한다`() {
+        seedUsersAndFriendship()
+        service().create(friend, me, "운동", "커피", DeadlineType.TODAY)
+
+        assertEquals(1, service().listReceived(me).size)
+
+        // 마감 후에는 응답에서 빠진다 (DB status 는 PENDING 그대로 — lazy expiry).
+        val later = Clock.fixed(Instant.parse("2026-07-28T15:00:01Z"), ZoneOffset.UTC)
+        assertEquals(0, service(later).listReceived(me).size)
+        assertEquals(ChallengeStatus.PENDING, challenges.all().single().status)
+    }
+
+    @Test
+    fun `listReceived - 내가 보낸 것은 포함되지 않는다`() {
+        seedUsersAndFriendship()
+        service().create(me, friend, "운동", "커피", DeadlineType.TODAY)
+
+        assertEquals(0, service().listReceived(me).size)
+        assertEquals(1, service().listReceived(friend).size)
+    }
+
+    // ─── fixtures ────────────────────────────────────────────────
+
+    private fun user(id: Long, nickname: String, status: UserStatus = UserStatus.ACTIVE) = User(
+        id = id,
+        kakaoId = 10_000L + id,
+        nickname = nickname,
+        profileImageUrl = null,
+        phoneNumber = null,
+        phoneVerified = false,
+        fcmToken = null,
+        status = status,
+        createdAt = LocalDateTime.of(2026, 1, 1, 0, 0),
+        updatedAt = LocalDateTime.of(2026, 1, 1, 0, 0),
+    )
+
+    private fun challenge(
+        id: Long,
+        challengerId: Long,
+        opponentId: Long,
+        status: ChallengeStatus,
+        challengeDate: LocalDate,
+    ) = Challenge(
+        id = id,
+        challengerId = challengerId,
+        opponentId = opponentId,
+        challengerMission = "기존 미션",
+        opponentMission = if (status == ChallengeStatus.IN_PROGRESS) "상대 미션" else null,
+        betContent = "기존 내기",
+        challengeDate = challengeDate,
+        deadline = KstDeadlineCalculator.endOfKstDayInUtc(challengeDate),
+        status = status,
+        result = null,
+        createdAt = LocalDateTime.of(2026, 7, 28, 0, 0),
+        completedAt = null,
+    )
+}
+
+// ─── in-memory fakes ─────────────────────────────────────────────
+
+private class FakeChallengeRepository : ChallengeRepository {
+    private val store = LinkedHashMap<Long, Challenge>()
+    private var nextId = 1L
+
+    fun put(c: Challenge) {
+        store[c.id!!] = c
+        nextId = maxOf(nextId, c.id!! + 1)
+    }
+
+    fun all(): List<Challenge> = store.values.toList()
+    fun clear() = store.clear()
+
+    override fun findActiveByUser(userId: Long, statuses: Collection<ChallengeStatus>): List<Challenge> =
+        store.values
+            .filter { (it.challengerId == userId || it.opponentId == userId) && it.status in statuses }
+            .sortedBy { it.deadline }
+
+    override fun findById(id: Long): Challenge? = store[id]
+
+    override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> =
+        store.values
+            .filter {
+                it.opponentId == opponentId &&
+                    it.status == ChallengeStatus.PENDING &&
+                    it.deadline > now
+            }
+            .sortedByDescending { it.createdAt }
+            .map {
+                ReceivedChallenge(
+                    challengeId = it.id!!,
+                    challengerId = it.challengerId,
+                    challengerNickname = "챌린저${it.challengerId}",
+                    challengerProfileImageUrl = null,
+                    challengerMission = it.challengerMission,
+                    betContent = it.betContent,
+                    challengeDate = it.challengeDate,
+                    deadline = it.deadline,
+                    createdAt = it.createdAt,
+                )
+            }
+
+    override fun findConflicting(
+        userA: Long,
+        userB: Long,
+        challengeDate: LocalDate,
+        statuses: Collection<ChallengeStatus>,
+    ): List<Challenge> = store.values.filter {
+        val samePair = (it.challengerId == userA && it.opponentId == userB) ||
+            (it.challengerId == userB && it.opponentId == userA)
+        samePair && it.challengeDate == challengeDate && it.status in statuses
+    }
+
+    override fun save(challenge: Challenge): Challenge {
+        val id = challenge.id ?: nextId++
+        val saved = challenge.copy(id = id)
+        store[id] = saved
+        return saved
+    }
+
+    override fun saveAndFlush(challenge: Challenge): Challenge = save(challenge)
+
+    override fun deleteById(id: Long) {
+        store.remove(id)
+    }
+}
+
+private class FakeFriendshipRepository : FriendshipRepository {
+    private val store = mutableListOf<Friendship>()
+
+    fun put(f: Friendship) {
+        store.removeAll { it.id == f.id }
+        store.add(f)
+    }
+
+    override fun findBetween(userA: Long, userB: Long): List<Friendship> = store.filter {
+        (it.requesterId == userA && it.receiverId == userB) ||
+            (it.requesterId == userB && it.receiverId == userA)
+    }
+
+    override fun findById(id: Long): Friendship? = store.firstOrNull { it.id == id }
+
+    override fun searchByNickname(me: Long, escapedPattern: String): List<UserSearchResult> = emptyList()
+    override fun findFriendsOf(me: Long): List<Friend> = emptyList()
+    override fun findReceivedRequestsOf(me: Long): List<FriendRequest> = emptyList()
+    override fun save(friendship: Friendship): Friendship = friendship.also { put(it) }
+    override fun saveAndFlush(friendship: Friendship): Friendship = save(friendship)
+    override fun deleteById(id: Long) {
+        store.removeAll { it.id == id }
+    }
+}
+
+private class FakeUserRepository : UserRepository {
+    private val store = LinkedHashMap<Long, User>()
+
+    fun put(u: User) {
+        store[u.id!!] = u
+    }
+
+    override fun findById(id: Long): User? = store[id]
+    override fun findByKakaoId(kakaoId: Long): User? = store.values.firstOrNull { it.kakaoId == kakaoId }
+    override fun findAllByIds(ids: Collection<Long>): Map<Long, User> =
+        ids.mapNotNull { store[it] }.associateBy { it.id!! }
+
+    override fun save(user: User): User = user.also { put(it) }
+    override fun updateRefreshTokenHash(userId: Long, hash: String?, issuedAt: LocalDateTime?) = Unit
+}
+
+private class FakeVerificationRepository : VerificationRepository {
+    private val store = mutableListOf<Verification>()
+    private var nextId = 1L
+
+    fun all(): List<Verification> = store.toList()
+
+    override fun findAllByChallengeIds(challengeIds: Collection<Long>): List<Verification> =
+        store.filter { it.challengeId in challengeIds }
+
+    override fun save(verification: Verification): Verification {
+        val saved = verification.copy(id = verification.id ?: nextId++)
+        store.removeAll { it.id == saved.id }
+        store.add(saved)
+        return saved
+    }
+
+    override fun saveAllAndFlush(verifications: Collection<Verification>): List<Verification> =
+        verifications.map { save(it) }
+}

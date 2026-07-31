@@ -17,4 +17,13 @@ interface VerificationRepository {
 
     /** 저장 (테스트 시드/인증 트랜잭션용). */
     fun save(verification: Verification): Verification
+
+    /**
+     * 여러 건 일괄 저장 후 즉시 flush.
+     *
+     * 챌린지 수락 시 양측(challenger / opponent) PENDING row 2건을 **같은 트랜잭션**에서 만들기 위해 사용.
+     * `uq_verifications_challenge_user` 유니크 제약이 중복 수락에 대한 안전망 역할을 하는데,
+     * flush 를 미루면 그 제약 위반이 service 의 try/catch 밖에서 터진다 (friends 2차 saveAndFlush 선례).
+     */
+    fun saveAllAndFlush(verifications: Collection<Verification>): List<Verification>
 }

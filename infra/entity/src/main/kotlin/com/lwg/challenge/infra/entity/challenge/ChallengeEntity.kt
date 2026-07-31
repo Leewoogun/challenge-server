@@ -13,9 +13,12 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
- * `challenges` 테이블 JPA 매핑. V1__init.sql 스키마 그대로.
+ * `challenges` 테이블 JPA 매핑. V1__init.sql 스키마 + V5 (opponent_mission nullable).
  *
  * `status` / `result` 는 VARCHAR enum name 으로 저장.
+ *
+ * `opponentMission` 은 상대가 수락(accept)하며 직접 입력하므로 PENDING 구간에서는 null 이다
+ * (challenge-create spec 결정 2, V5__challenge_create_opponent_mission_nullable.sql).
  */
 @Entity
 @Table(name = "challenges")
@@ -34,8 +37,8 @@ class ChallengeEntity(
     @Column(name = "challenger_mission", nullable = false, columnDefinition = "TEXT")
     var challengerMission: String,
 
-    @Column(name = "opponent_mission", nullable = false, columnDefinition = "TEXT")
-    var opponentMission: String,
+    @Column(name = "opponent_mission", columnDefinition = "TEXT")
+    var opponentMission: String? = null,
 
     @Column(name = "bet_content", nullable = false, columnDefinition = "TEXT")
     var betContent: String,

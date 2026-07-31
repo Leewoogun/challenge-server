@@ -18,4 +18,10 @@ class VerificationRepositoryImpl(
 
     override fun save(verification: Verification): Verification =
         jpa.save(VerificationEntity.fromDomain(verification)).toDomain()
+
+    override fun saveAllAndFlush(verifications: Collection<Verification>): List<Verification> {
+        if (verifications.isEmpty()) return emptyList()
+        return jpa.saveAllAndFlush(verifications.map { VerificationEntity.fromDomain(it) })
+            .map { it.toDomain() }
+    }
 }
