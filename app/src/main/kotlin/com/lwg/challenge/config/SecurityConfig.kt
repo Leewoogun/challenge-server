@@ -38,6 +38,24 @@ class SecurityConfig(
                 val apiDocsAll = "/v3/api-docs/" + "**"
                 auth
                     .requestMatchers(HttpMethod.POST, "/api/v1/auth/kakao", "/api/v1/auth/refresh").permitAll()
+                    // ── 개발용 테스트 로그인 (dev-test-login T-B1a) ──
+                    //
+                    // ⚠️ 이 permitAll 은 **플래그와 무관하게 상시**다. 조건부로 묶으면 안 된다.
+                    //
+                    // 컨트롤러 빈은 `challenge.dev.test-login.enabled=true` 일 때만 생성된다(fail-closed).
+                    // 그런데 permitAll 까지 같은 조건으로 묶으면, 꺼진 환경에서 요청이 Security 에 걸려
+                    // **401** 이 나간다. 우리가 원하는 건 "그런 경로가 없다"는 **404** 다.
+                    // 404 가 나오려면 꺼진 상태에서도 Security 를 통과해 라우팅까지 도달해야 한다.
+                    //
+                    // 401 이면 모바일 Ktor Auth(bearer) 가 "access 만료"로 오인해 refresh 를 시도하고,
+                    // 로그인 화면엔 refresh token 이 없어 `emitSessionExpired()` → 로그인 화면 리셋으로 이어진다.
+                    // **경로가 없을 뿐인데 앱이 "세션 만료"라는 틀린 결론을 낸다.**
+                    //
+                    // 🔒 **실제 노출을 막는 것은 이 permitAll 이 아니라 "빈이 존재하지 않는다"는 사실이다.**
+                    //    핸들러가 없으면 permitAll 은 "인증 없이 라우팅까지 도달"만 허용하고 그 끝은 404 다.
+                    //
+                    // ⚠️ 따라서 **이 경로에 다른 핸들러를 매핑하면 인증 없이 공개된다.** 매핑 시 반드시 재검토할 것.
+                    .requestMatchers(HttpMethod.POST, "/api/v1/auth/test-login").permitAll()
                     .requestMatchers(
                         swaggerUiAll,
                         "/swagger-ui.html",

@@ -92,6 +92,25 @@ class AuthService(
             log.info("기존 사용자 로그인: userId={}, kakaoId={}", userId, kakaoUser.kakaoId)
         }
 
+        val tokens = issueTokens(userId)
+
+        return LoginResult(
+            accessToken = tokens.accessToken,
+            refreshToken = tokens.refreshToken,
+            userId = userId,
+            isNewUser = isNewUser,
+        )
+    }
+
+    /**
+     * [userId] 에 대해 access + refresh 를 발급하고 refresh hash 를 저장한다 (ADR-0009 rotation).
+     *
+     * **카카오 로그인과 개발용 테스트 로그인이 이 메서드를 공유한다.**
+     * 별도 발급 로직을 만들면 `refresh_token_hash` 저장이 갈라져 rotation 이 한쪽에서만 동작하고,
+     * 토큰 형태도 달라져 모바일이 후처리를 두 벌 만들어야 한다 (dev-test-login spec 요구사항).
+     */
+    @Transactional
+    fun issueTokens(userId: Long): IssuedTokens {
         val accessToken = jwtTokenProvider.generateAccessToken(userId)
         val refreshToken = jwtTokenProvider.generateRefreshToken(userId)
 
@@ -101,12 +120,7 @@ class AuthService(
             issuedAt = LocalDateTime.now(clock),
         )
 
-        return LoginResult(
-            accessToken = accessToken,
-            refreshToken = refreshToken,
-            userId = userId,
-            isNewUser = isNewUser,
-        )
+        return IssuedTokens(accessToken = accessToken, refreshToken = refreshToken)
     }
 
     /**

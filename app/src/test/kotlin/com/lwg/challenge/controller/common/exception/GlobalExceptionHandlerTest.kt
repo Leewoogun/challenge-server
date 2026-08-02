@@ -5,7 +5,9 @@ import com.lwg.challenge.domain.common.exception.DialogException
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.common.exception.UnauthorizedException
+import org.springframework.http.HttpMethod
 import org.springframework.http.converter.HttpMessageNotReadableException
+import org.springframework.web.servlet.resource.NoResourceFoundException
 import org.springframework.mock.http.MockHttpInputMessage
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -99,5 +101,34 @@ class GlobalExceptionHandlerTest {
         val body = response.body!!
         assertEquals(true, body.error)
         assertEquals(ResponseCode.INTERNAL_ERROR, body.code)
+    }
+
+    /**
+     * dev-test-login T-B1b. 매핑된 핸들러가 없으면 **404** — 500 이 아니다.
+     *
+     * 이 핸들러가 없던 시절 `/actuator/health` 가 catch-all 에 걸려 500 을 냈다(2026-07-31 실측).
+     * `dev-test-login` 은 꺼진 환경에서 **404 로 "그 기능이 없다"** 를 알려야 하는데,
+     * 500 이나 401 이 나가면 모바일이 각각 "서버 고장" / "세션 만료" 라는 **틀린 결론**을 낸다.
+     */
+    @Test
+    fun `매핑된 핸들러가 없으면 HTTP 404 다`() {
+        val response = handler.handleNotFound(
+            NoResourceFoundException(HttpMethod.POST, "/api/v1/auth/test-login"),
+        )
+
+        assertEquals(404, response.statusCode.value())
+        val body = response.body!!
+        assertEquals(true, body.error)
+        assertEquals(404, body.code)
+    }
+
+    @Test
+    fun `404 는 catch-all 의 500 으로 떨어지지 않는다`() {
+        // 회귀 방지: handleNotFound 가 사라지면 NoResourceFoundException 이 handleUncaught 로 가서 500 이 된다.
+        val notFound = handler.handleNotFound(NoResourceFoundException(HttpMethod.GET, "/does-not-exist"))
+        val uncaught = handler.handleUncaught(RuntimeException("boom"))
+
+        assertEquals(404, notFound.statusCode.value())
+        assertEquals(500, uncaught.statusCode.value())
     }
 }
