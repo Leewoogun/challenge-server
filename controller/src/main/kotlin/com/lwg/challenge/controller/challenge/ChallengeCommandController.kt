@@ -3,6 +3,10 @@ package com.lwg.challenge.controller.challenge
 import com.lwg.challenge.controller.challenge.dto.AcceptChallengeBody
 import com.lwg.challenge.controller.challenge.dto.AcceptChallengeResponse
 import com.lwg.challenge.controller.challenge.dto.CancelChallengeData
+import com.lwg.challenge.controller.challenge.dto.ChallengeDetailData
+import com.lwg.challenge.controller.challenge.dto.ChallengeDetailResponse
+import com.lwg.challenge.controller.challenge.dto.ContractDto
+import com.lwg.challenge.controller.challenge.dto.PartyDto
 import com.lwg.challenge.controller.challenge.dto.CancelChallengeResponse
 import com.lwg.challenge.controller.challenge.dto.ChallengeCreateData
 import com.lwg.challenge.controller.challenge.dto.ChallengeCreateResponse
@@ -17,6 +21,9 @@ import com.lwg.challenge.domain.challenge.ReceivedChallenge
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.service.challenge.ChallengeCommandService
+import com.lwg.challenge.service.challenge.ChallengeDetailService
+import com.lwg.challenge.service.challenge.ChallengeDetailView
+import com.lwg.challenge.domain.challenge.ChallengeStatus
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import io.swagger.v3.oas.annotations.tags.Tag
@@ -48,7 +55,53 @@ import java.time.temporal.ChronoUnit
 @Tag(name = "Challenge", description = "챌린지 신청 / 수락 / 거절 / 취소")
 class ChallengeCommandController(
     private val challengeCommandService: ChallengeCommandService,
+    private val challengeDetailService: ChallengeDetailService,
 ) {
+
+    @GetMapping("/challenges/{id}")
+    @Operation(
+        summary = "챌린지 상세 (계약서 + 양측 서명)",
+        description = "당사자만 조회 가능. challenger/opponent 를 **역할 그대로** 반환한다 — " +
+            "계약서 화면은 양쪽을 다 그리므로 \"나/상대\" 로 뒤집지 않는다. 미서명 필드는 null.",
+    )
+    @SecurityRequirement(name = "bearerAuth")
+    fun getDetail(
+        @PathVariable("id") id: Long,
+    ): ChallengeDetailResponse {
+        val me = currentUserId()
+        val view: ChallengeDetailView = challengeDetailService.getDetail(me, id)
+        return ChallengeDetailResponse(
+            data = ChallengeDetailData(
+                challengeId = view.challengeId,
+                status = ChallengeStatus.valueOf(view.status),
+                challengeDate = view.challengeDate,
+                deadline = view.deadline,
+                betContent = view.betContent,
+                challenger = PartyDto(
+                    userId = view.challenger.userId,
+                    nickname = view.challenger.nickname,
+                    profileImageUrl = view.challenger.profileImageUrl,
+                    mission = view.challenger.mission,
+                ),
+                opponent = PartyDto(
+                    userId = view.opponent.userId,
+                    nickname = view.opponent.nickname,
+                    profileImageUrl = view.opponent.profileImageUrl,
+                    mission = view.opponent.mission,
+                ),
+                contract = view.contract?.let {
+                    ContractDto(
+                        content = it.content,
+                        isFinalized = it.isFinalized,
+                        challengerSignature = it.challengerSignature,
+                        challengerSignedAt = it.challengerSignedAt,
+                        opponentSignature = it.opponentSignature,
+                        opponentSignedAt = it.opponentSignedAt,
+                    )
+                },
+            ),
+        )
+    }
 
     @PostMapping("/challenges")
     @Operation(
@@ -67,6 +120,7 @@ class ChallengeCommandController(
             myMission = body.myMission.orEmpty(),
             betContent = body.betContent.orEmpty(),
             deadlineType = body.deadlineType ?: throw SnackbarException(MSG_DEADLINE_REQUIRED),
+            signature = body.signature ?: throw SnackbarException(MSG_SIGNATURE_REQUIRED),
         )
         return ChallengeCreateResponse(
             data = ChallengeCreateData(
@@ -109,6 +163,7 @@ class ChallengeCommandController(
             me = me,
             challengeId = id,
             myMission = body.myMission.orEmpty(),
+            signature = body.signature ?: throw SnackbarException(MSG_SIGNATURE_REQUIRED),
         )
         return AcceptChallengeResponse(
             data = ChallengeStatusData(
@@ -183,5 +238,6 @@ class ChallengeCommandController(
         // @NotNull 이 먼저 걸리므로 정상 경로에서는 도달하지 않지만, 방어적으로 같은 문구를 쓴다.
         private const val MSG_OPPONENT_REQUIRED = "상대를 찾을 수 없어요"
         private const val MSG_DEADLINE_REQUIRED = "마감을 선택해주세요"
+        private const val MSG_SIGNATURE_REQUIRED = "서명을 해주세요"
     }
 }

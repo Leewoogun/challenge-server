@@ -10,6 +10,7 @@ import com.lwg.challenge.domain.common.ResponseCode
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.service.challenge.ChallengeCommandService
+import com.lwg.challenge.service.challenge.ChallengeDetailService
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.anyLong
@@ -60,7 +61,15 @@ class ChallengeCommandControllerTest {
     @MockitoBean
     lateinit var challengeCommandService: ChallengeCommandService
 
+    /** soul-oath 로 컨트롤러가 상세 조회 서비스도 주입받는다. 슬라이스 컨텍스트 로드에 필요. */
+    @MockitoBean
+    lateinit var challengeDetailService: ChallengeDetailService
+
     private val meId = 42L
+
+    /** soul-oath 이후 create/accept 가 서명을 받는다. 서버가 저장하는 compact 문자열 형태. */
+    private val SIG = """{"v":1,"g":1000,"s":[[100,200,110,210]]}"""
+    private val ACCEPT_SIG = """{"v":1,"g":1000,"s":[[10,20,30,40]]}"""
 
     @BeforeEach
     fun setUpAuthentication() {
@@ -77,7 +86,7 @@ class ChallengeCommandControllerTest {
     @Test
     fun `create - 정상 응답 + challengeDate 는 평문 ISO date 문자열이다`() {
         Mockito.`when`(
-            challengeCommandService.create(meId, 7L, "운동 1시간", "커피 사기", DeadlineType.TODAY),
+            challengeCommandService.create(meId, 7L, "운동 1시간", "커피 사기", DeadlineType.TODAY, SIG),
         ).thenReturn(challenge(id = 100L, status = ChallengeStatus.PENDING))
 
         mockMvc.perform(
@@ -85,7 +94,7 @@ class ChallengeCommandControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     """
-                    {"opponentId":7,"myMission":"운동 1시간","betContent":"커피 사기","deadlineType":"TODAY"}
+                    {"opponentId":7,"myMission":"운동 1시간","betContent":"커피 사기","deadlineType":"TODAY","signature":"{\"v\":1,\"g\":1000,\"s\":[[100,200,110,210]]}"}
                     """.trimIndent(),
                 ),
         )
@@ -103,13 +112,13 @@ class ChallengeCommandControllerTest {
     @Test
     fun `create - 친구가 아니면 code 700 + 확정 문구`() {
         Mockito.`when`(
-            challengeCommandService.create(meId, 7L, "운동", "커피", DeadlineType.TODAY),
+            challengeCommandService.create(meId, 7L, "운동", "커피", DeadlineType.TODAY, SIG),
         ).thenThrow(SnackbarException(ChallengeCommandService.MSG_NOT_FRIEND))
 
         mockMvc.perform(
             post("/api/v1/challenges")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"opponentId":7,"myMission":"운동","betContent":"커피","deadlineType":"TODAY"}"""),
+                .content("""{"opponentId":7,"myMission":"운동","betContent":"커피","deadlineType":"TODAY","signature":"{\"v\":1,\"g\":1000,\"s\":[[100,200,110,210]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(true))
@@ -120,13 +129,13 @@ class ChallengeCommandControllerTest {
     @Test
     fun `create - 역방향 중복은 받은 도전장으로 안내하는 문구다`() {
         Mockito.`when`(
-            challengeCommandService.create(meId, 7L, "운동", "커피", DeadlineType.TODAY),
+            challengeCommandService.create(meId, 7L, "운동", "커피", DeadlineType.TODAY, SIG),
         ).thenThrow(SnackbarException(ChallengeCommandService.MSG_DUPLICATE_REVERSE))
 
         mockMvc.perform(
             post("/api/v1/challenges")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"opponentId":7,"myMission":"운동","betContent":"커피","deadlineType":"TODAY"}"""),
+                .content("""{"opponentId":7,"myMission":"운동","betContent":"커피","deadlineType":"TODAY","signature":"{\"v\":1,\"g\":1000,\"s\":[[100,200,110,210]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.message").value("이 친구가 이미 도전장을 보냈어요. 받은 도전장을 확인해보세요"))
@@ -146,6 +155,7 @@ class ChallengeCommandControllerTest {
                             "myMission" to tooLong,
                             "betContent" to "커피",
                             "deadlineType" to "TODAY",
+                            "signature" to """{"v":1,"g":1000,"s":[[1,2,3,4]]}""",
                         ),
                     ),
                 ),
@@ -161,7 +171,7 @@ class ChallengeCommandControllerTest {
         mockMvc.perform(
             post("/api/v1/challenges")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"opponentId":0,"myMission":"운동","betContent":"커피","deadlineType":"TODAY"}"""),
+                .content("""{"opponentId":0,"myMission":"운동","betContent":"커피","deadlineType":"TODAY","signature":"{\"v\":1,\"g\":1000,\"s\":[[100,200,110,210]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(true))
@@ -171,7 +181,7 @@ class ChallengeCommandControllerTest {
     @Test
     fun `create - deadlineType TOMORROW 도 바인딩된다`() {
         Mockito.`when`(
-            challengeCommandService.create(meId, 7L, "운동", "커피", DeadlineType.TOMORROW),
+            challengeCommandService.create(meId, 7L, "운동", "커피", DeadlineType.TOMORROW, SIG),
         ).thenReturn(
             challenge(
                 id = 101L,
@@ -184,7 +194,7 @@ class ChallengeCommandControllerTest {
         mockMvc.perform(
             post("/api/v1/challenges")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"opponentId":7,"myMission":"운동","betContent":"커피","deadlineType":"TOMORROW"}"""),
+                .content("""{"opponentId":7,"myMission":"운동","betContent":"커피","deadlineType":"TOMORROW","signature":"{\"v\":1,\"g\":1000,\"s\":[[100,200,110,210]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.challengeDate").value("2026-07-29"))
@@ -268,13 +278,13 @@ class ChallengeCommandControllerTest {
 
     @Test
     fun `accept - IN_PROGRESS 응답`() {
-        Mockito.`when`(challengeCommandService.accept(meId, 7L, "책 30페이지 읽기"))
+        Mockito.`when`(challengeCommandService.accept(meId, 7L, "책 30페이지 읽기", ACCEPT_SIG))
             .thenReturn(challenge(id = 7L, status = ChallengeStatus.IN_PROGRESS))
 
         mockMvc.perform(
             post("/api/v1/challenges/7/accept")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"myMission":"책 30페이지 읽기"}"""),
+                .content("""{"myMission":"책 30페이지 읽기","signature":"{\"v\":1,\"g\":1000,\"s\":[[10,20,30,40]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(false))
@@ -284,13 +294,13 @@ class ChallengeCommandControllerTest {
 
     @Test
     fun `accept - 이미 처리된 챌린지는 code 705`() {
-        Mockito.`when`(challengeCommandService.accept(anyLong(), anyLong(), anyString()))
+        Mockito.`when`(challengeCommandService.accept(anyLong(), anyLong(), anyString(), anyString()))
             .thenThrow(OneButtonDialogException(ChallengeCommandService.MSG_ALREADY_HANDLED))
 
         mockMvc.perform(
             post("/api/v1/challenges/7/accept")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"myMission":"책"}"""),
+                .content("""{"myMission":"책","signature":"{\"v\":1,\"g\":1000,\"s\":[[10,20,30,40]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(true))
@@ -300,13 +310,13 @@ class ChallengeCommandControllerTest {
 
     @Test
     fun `accept - 마감 경과는 code 705 + 확정 문구`() {
-        Mockito.`when`(challengeCommandService.accept(anyLong(), anyLong(), anyString()))
+        Mockito.`when`(challengeCommandService.accept(anyLong(), anyLong(), anyString(), anyString()))
             .thenThrow(OneButtonDialogException(ChallengeCommandService.MSG_EXPIRED))
 
         mockMvc.perform(
             post("/api/v1/challenges/7/accept")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"myMission":"책"}"""),
+                .content("""{"myMission":"책","signature":"{\"v\":1,\"g\":1000,\"s\":[[10,20,30,40]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.code").value(ResponseCode.ONE_BUTTON_DIALOG_ERROR))
@@ -315,13 +325,13 @@ class ChallengeCommandControllerTest {
 
     @Test
     fun `accept - 당사자가 아니면 code 700 + 사용자가 이해할 수 있는 문구`() {
-        Mockito.`when`(challengeCommandService.accept(anyLong(), anyLong(), anyString()))
+        Mockito.`when`(challengeCommandService.accept(anyLong(), anyLong(), anyString(), anyString()))
             .thenThrow(SnackbarException(ChallengeCommandService.MSG_NOT_MY_RECEIVED))
 
         mockMvc.perform(
             post("/api/v1/challenges/7/accept")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"myMission":"책"}"""),
+                .content("""{"myMission":"책","signature":"{\"v\":1,\"g\":1000,\"s\":[[10,20,30,40]]}"}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.code").value(ResponseCode.SNACKBAR_ERROR))

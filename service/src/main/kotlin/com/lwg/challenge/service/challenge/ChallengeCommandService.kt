@@ -8,6 +8,9 @@ import com.lwg.challenge.domain.challenge.ChallengeRepository
 import com.lwg.challenge.domain.challenge.ChallengeStatus
 import com.lwg.challenge.domain.challenge.ReceivedChallenge
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
+import com.lwg.challenge.domain.contract.Contract
+import com.lwg.challenge.domain.contract.ContractRepository
+import com.lwg.challenge.domain.contract.SignatureValidator
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.friend.FriendshipRepository
 import com.lwg.challenge.domain.friend.FriendshipStatus
@@ -46,6 +49,7 @@ class ChallengeCommandService(
     private val friendshipRepository: FriendshipRepository,
     private val userRepository: UserRepository,
     private val verificationRepository: VerificationRepository,
+    private val contractRepository: ContractRepository,
     private val clock: Clock,
 ) {
 
@@ -66,6 +70,7 @@ class ChallengeCommandService(
         myMission: String,
         betContent: String,
         deadlineType: DeadlineType,
+        signature: String,
     ): Challenge {
         if (me == opponentId) {
             throw SnackbarException(MSG_SELF_CHALLENGE)
@@ -73,6 +78,8 @@ class ChallengeCommandService(
 
         val mission = requireLength(myMission, MSG_MISSION_LENGTH)
         val bet = requireLength(betContent, MSG_BET_LENGTH)
+        // 서명 검증은 DB 를 치기 전에 — 입력 문제로 거부될 요청에 쿼리 비용을 쓰지 않는다.
+        SignatureValidator.validate(signature)
 
         val opponent = userRepository.findById(opponentId)
             ?: throw SnackbarException(MSG_OPPONENT_NOT_FOUND)
@@ -109,11 +116,39 @@ class ChallengeCommandService(
         // 사전 검사 통과 후에도 동시 INSERT race 가 남는다 — READ COMMITTED 에서 상대 트랜잭션의
         // 미커밋 row 는 보이지 않기 때문. V5 의 부분 유니크 인덱스(uq_challenges_active_pair_date)가
         // 최종 방어선이고, saveAndFlush 로 즉시 flush 해야 그 위반이 이 catch 안에서 잡힌다.
-        return try {
+        val created = try {
             challengeRepository.saveAndFlush(toInsert)
         } catch (e: DataIntegrityViolationException) {
             throw SnackbarException(MSG_DUPLICATE_OWN)
         }
+
+        // 🔴 계약서를 같은 트랜잭션에서 만든다 — 챌린저 서명만 채우고 isFinalized=false.
+        // 챌린지는 있는데 계약서가 없는 상태가 생기면 상대가 맹세 화면에서 볼 게 없다.
+        val challengeId = created.id ?: error("저장된 challenge 의 id 가 null 일 수 없습니다")
+        contractRepository.save(
+            Contract(
+                id = null,
+                challengeId = challengeId,
+                content = ContractContent.render(
+                    challengerNickname = userRepository.findById(me)?.nickname ?: UNKNOWN_NICKNAME,
+                    challengerMission = mission,
+                    opponentNickname = opponent.nickname,
+                    // 아직 수락 전이라 상대 미션이 없다 → "(수락 시 기재)".
+                    // 수락+서명 시점에 실제 미션으로 **재렌더**한다 (ContractContent KDoc).
+                    opponentMission = null,
+                    betContent = bet,
+                    challengeDate = schedule.challengeDate,
+                ),
+                challengerSignatureData = signature,
+                challengerSignedAt = now,
+                opponentSignatureData = null,
+                opponentSignedAt = null,
+                isFinalized = false,
+                createdAt = now,
+            ),
+        )
+
+        return created
     }
 
     // ─── 2. 받은 도전장 목록 ──────────────────────────────────────
@@ -140,9 +175,40 @@ class ChallengeCommandService(
      * 영혼의 맹세 feature 가 나중에 두 상태 사이에 끼어든다.
      */
     @Transactional
-    fun accept(me: Long, challengeId: Long, myMission: String): Challenge {
+    fun accept(me: Long, challengeId: Long, myMission: String, signature: String): Challenge {
         val challenge = loadForResponse(challengeId, me, expectedActor = Actor.OPPONENT)
         val mission = requireLength(myMission, MSG_MISSION_LENGTH)
+        SignatureValidator.validate(signature)
+
+        // 🔴 계약서를 먼저 완결시킨다. `is_finalized = true` 가 된 시점에만 IN_PROGRESS 로 간다
+        // (spec 수용 기준). 원자 요청이라 둘은 항상 함께 일어난다.
+        val contract = contractRepository.findByChallengeId(challengeId)
+            ?: throw OneButtonDialogException(MSG_CONTRACT_MISSING)
+        if (contract.isFinalized) {
+            // "무를 수 없다" — 재서명 거부. 대개는 위 status 가드가 먼저 막지만 2차 방어선이다.
+            throw OneButtonDialogException(MSG_ALREADY_OATHED)
+        }
+        val signedAt = nowKst()
+        // 🔴 본문을 **여기서 한 번 더 렌더**한다. 신청 시점 본문은 상대 미션이 "(수락 시 기재)" 인
+        // 미완성 스냅샷이고, 그걸 그대로 두면 완성된 계약서에 한쪽 약속이 영영 비어 있다.
+        // 박제 대상은 완성된 약속이어야 한다 — 그 시점이 is_finalized 다 (ContractContent KDoc).
+        // 이 뒤로는 재렌더가 없다: 재서명이 위에서 막히므로 이 경로는 계약당 한 번만 실행된다.
+        val parties = userRepository.findAllByIds(setOf(challenge.challengerId, challenge.opponentId))
+        contractRepository.save(
+            contract.copy(
+                content = ContractContent.render(
+                    challengerNickname = parties[challenge.challengerId]?.nickname ?: UNKNOWN_NICKNAME,
+                    challengerMission = challenge.challengerMission,
+                    opponentNickname = parties[challenge.opponentId]?.nickname ?: UNKNOWN_NICKNAME,
+                    opponentMission = mission,
+                    betContent = challenge.betContent,
+                    challengeDate = challenge.challengeDate,
+                ),
+                opponentSignatureData = signature,
+                opponentSignedAt = signedAt,
+                isFinalized = true,
+            ),
+        )
 
         val accepted = challengeRepository.save(
             challenge.copy(
@@ -203,6 +269,11 @@ class ChallengeCommandService(
         if (challenge.status != ChallengeStatus.PENDING) {
             throw OneButtonDialogException(MSG_ALREADY_HANDLED)
         }
+        // 🔴 contract 를 **먼저** 지운다. `contracts_challenge_id_fkey` 에 ON DELETE 절이 없어
+        // 순서를 지키지 않으면 FK 위반 → HTTP 500 이다 (soul-oath api-contract §0.4).
+        // CASCADE 를 쓰지 않는 이유: "무를 수 없는 약속" 이 컨셉인데 CASCADE 는 다른 이유로
+        // challenge 를 지울 때도 맹세를 조용히 함께 지운다. 명시적 삭제는 코드에 순서가 보인다.
+        contractRepository.deleteByChallengeId(challengeId)
         challengeRepository.deleteById(challengeId)
     }
 
@@ -316,5 +387,8 @@ class ChallengeCommandService(
         const val MSG_EXPIRED = "마감이 지난 챌린지예요"
         const val MSG_NOT_MY_RECEIVED = "내가 받은 도전장이 아니에요"
         const val MSG_NOT_MY_SENT = "내가 보낸 도전장이 아니에요"
+        const val MSG_ALREADY_OATHED = "이미 맹세를 마친 챌린지예요"
+        const val MSG_CONTRACT_MISSING = "계약서를 찾을 수 없어요"
+        private const val UNKNOWN_NICKNAME = "(알 수 없음)"
     }
 }

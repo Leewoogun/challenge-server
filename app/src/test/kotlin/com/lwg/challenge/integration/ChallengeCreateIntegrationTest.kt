@@ -89,6 +89,18 @@ class ChallengeCreateIntegrationTest {
 
     companion object {
 
+        /** soul-oath 이후 생성·수락이 서명을 요구한다. 유효한 최소 서명 — **DB 에 이 문자열이 그대로 저장돼야 한다.** */
+        const val SIGNATURE = """{"v":1,"g":1000,"s":[[100,200,110,210]]}"""
+
+        /**
+         * 요청 본문에 박히는 형태.
+         *
+         * `signature` 는 JSON **객체가 아니라 문자열** 필드다(계약 §4.4 — 파싱 전에 길이를 재려면
+         * 문자열로 도착해야 한다). 그래서 따옴표로 감싸고 내부 `"` 를 이스케이프한다.
+         * [SIGNATURE] 에서 파생시켜 두 값이 어긋날 수 없게 한다.
+         */
+        val SIGNATURE_FIELD = "\"" + SIGNATURE.replace("\"", "\\\"") + "\""
+
         @JvmStatic
         val postgres: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:16-alpine")
             .withDatabaseName("challenge_test")
@@ -277,7 +289,7 @@ class ChallengeCreateIntegrationTest {
             MockMvcRequestBuilders.post("/api/v1/challenges/$challengeId/accept")
                 .header("Authorization", "Bearer ${accessTokenFor(me.id!!)}")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"myMission":"책 30페이지 읽기"}"""),
+                .content("""{"myMission":"책 30페이지 읽기","signature":$SIGNATURE_FIELD}"""),
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(false))
@@ -304,7 +316,7 @@ class ChallengeCreateIntegrationTest {
             MockMvcRequestBuilders.post("/api/v1/challenges/$challengeId/accept")
                 .header("Authorization", "Bearer $token")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"myMission":"책 30페이지 읽기"}"""),
+                .content("""{"myMission":"책 30페이지 읽기","signature":$SIGNATURE_FIELD}"""),
         ).andExpect(status().isOk)
 
         // 지연/재시도 없이 즉시 두 목록을 호출한다 — 모바일이 실제로 하는 순서 그대로.
@@ -534,7 +546,7 @@ class ChallengeCreateIntegrationTest {
         mockMvc.perform(
             MockMvcRequestBuilders.post("/api/v1/challenges")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("""{"opponentId":1,"myMission":"운동","betContent":"커피","deadlineType":"TODAY"}"""),
+                .content("""{"opponentId":1,"myMission":"운동","betContent":"커피","deadlineType":"TODAY","signature":$SIGNATURE_FIELD}"""),
         ).andExpect(jsonPath("$.code").value(ResponseCode.UNAUTHORIZED))
     }
 
@@ -612,7 +624,7 @@ class ChallengeCreateIntegrationTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"opponentId":$opponentId,"myMission":"$mission","betContent":"$bet","deadlineType":"$deadlineType"}
+                {"opponentId":$opponentId,"myMission":"$mission","betContent":"$bet","deadlineType":"$deadlineType","signature":$SIGNATURE_FIELD}
                 """.trimIndent(),
             ),
     )
@@ -635,7 +647,7 @@ class ChallengeCreateIntegrationTest {
         MockMvcRequestBuilders.post("/api/v1/challenges/$challengeId/accept")
             .header("Authorization", "Bearer ${accessTokenFor(me)}")
             .contentType(MediaType.APPLICATION_JSON)
-            .content("""{"myMission":"$mission"}"""),
+            .content("""{"myMission":"$mission","signature":$SIGNATURE_FIELD}"""),
     )
 
     private fun accessTokenFor(userId: Long): String = jwtTokenProvider.generateAccessToken(userId)

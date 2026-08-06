@@ -48,6 +48,22 @@ data class CreateChallengeBody(
     @field:NotNull(message = "마감을 선택해주세요")
     @field:Schema(example = "TODAY", description = "TODAY = 오늘 자정 마감, TOMORROW = 내일 자정 마감 (KST 기준)")
     val deadlineType: DeadlineType?,
+
+    /**
+     * 영혼의 맹세 서명 — 벡터 스트로크 JSON **문자열** (soul-oath).
+     *
+     * ## 🔴 `JsonNode`(JSON 객체)가 아니라 `String` 인 이유
+     *
+     * 계약 §4.4의 검증 순서가 **"길이 → 파싱"** 이다. `JsonNode` 로 받으면 **DTO 바인딩 시점에
+     * Jackson 이 이미 전체를 파싱**해서, 검증기가 길이를 먼저 보든 말든 파싱 비용은 이미 치러진 뒤다.
+     * 즉 상한 검사가 악의적 대용량을 막지 못한다. **문자열로 받아야 그 순서가 실제로 성립한다.**
+     *
+     * 부수 효과로 **모바일이 인코딩한 바이트가 그대로 저장된다** — `JsonNode.toString()` 은
+     * 재직렬화라 구조는 같아도 바이트가 같다는 보장이 없다(§4.2 "무손실").
+     */
+    @field:NotNull(message = "서명을 해주세요")
+    @field:Schema(example = "{\"v\":1,\"g\":1000,\"s\":[[123,456,130,460]]}", description = "서명 벡터 스트로크 JSON 문자열")
+    val signature: String?,
 )
 
 @Schema(description = "챌린지 신청 응답")
@@ -114,6 +130,14 @@ data class AcceptChallengeBody(
     @field:Size(max = 100, message = "미션은 1자 이상 100자 이하로 입력해주세요")
     @field:Schema(example = "책 30페이지 읽기", description = "수락자 본인의 미션. opponent_mission 에 저장된다")
     val myMission: String?,
+
+    /**
+     * 영혼의 맹세 서명 JSON **문자열**. 이 요청 하나로 수락 + 서명 + IN_PROGRESS 전환이
+     * **원자적으로** 일어난다. 타입이 `String` 인 이유는 [CreateChallengeBody.signature] 참조.
+     */
+    @field:NotNull(message = "서명을 해주세요")
+    @field:Schema(example = "{\"v\":1,\"g\":1000,\"s\":[[10,20,30,40]]}", description = "서명 벡터 스트로크 JSON 문자열")
+    val signature: String?,
 )
 
 @Schema(description = "챌린지 수락 응답")
