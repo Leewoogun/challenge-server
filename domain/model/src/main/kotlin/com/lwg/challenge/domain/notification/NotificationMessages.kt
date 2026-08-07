@@ -3,10 +3,17 @@ package com.lwg.challenge.domain.notification
 /**
  * 푸시 알림 문구 (계약 §3 문구 표).
  *
- * ## 🟡 문구 미확정 — 이 파일이 유일한 문구 출처다
+ * ## 문구 확정 상태 — 이 파일이 유일한 문구 출처다
  *
- * ⚠️ **아래 3종은 계약 초안값이며 확정이 아니다.** Lovable 화면별 문구 톤이 이미 갈려 있고
- * (challenge-create/design.md §9), 반말/존댓말 축이 미결이다. 디자인 확인 후 바뀐다.
+ * | 타입 | 상태 |
+ * |---|---|
+ * | `CHALLENGE_REQUEST` | ✅ **사용자 확정 (2026-08-07)** — 격식체 |
+ * | `CHALLENGE_ACCEPTED` / `CHALLENGE_REJECTED` | 🟡 **초안값** — 반말. 디자인 확인 후 바뀔 수 있다 |
+ *
+ * ⚠️ **지금 세 종의 톤이 갈려 있다** (격식체 1 / 반말 2). `CHALLENGE_REQUEST` 는 제품 개념명을
+ * 제목으로 쓰는 계약 제안이라 격식체가 의도된 것이고, 나머지 둘은 아직 초안이다.
+ * **나머지 둘도 확정할 때 톤을 맞출지 갈라둘지 함께 정해야 한다** — 지금 상태를 "일관성 결함"으로
+ * 보고 임의로 통일하지 마라. 확정분을 초안에 맞추는 방향은 특히 안 된다.
  *
  * **그래서 문자열을 코드 곳곳에 흩지 않고 여기 모았다.** 문구가 확정되면 이 파일만 고치면 되고,
  * 나중에 흩어진 문자열을 찾아다닐 일이 없다. 🔴 **새 알림 타입을 추가할 때도 문구는 반드시 여기에
@@ -35,19 +42,22 @@ object NotificationMessages {
      *         내보내면 사용자에게 깨진 알림이 가므로, 문구가 없으면 아예 보내지 않는 쪽이 맞다.
      */
     fun of(type: NotificationType, actorNickname: String): Message? = when (type) {
+        // ✅ **사용자 확정 (2026-08-07).** 아래 두 종과 톤이 다른 것은 의도다 —
+        //    제목이 제품 개념명("영혼의 맹세")이고 본문이 계약 제안이라 격식체를 쓴다.
+        //    `soul-oath` 계약서 본문이 격식체인 것과 같은 결이다
+        //    ("화면은 앱이 나에게 말을 거는 것이고, 계약서는 문서다").
         NotificationType.CHALLENGE_REQUEST -> Message(
-            title = "새 도전장이 왔어!",
-            body = "${actorNickname}님이 도전장을 보냈어",
+            title = "영혼의 맹세",
+            body = "${actorNickname}과 계약을 하시렵니까?",
         )
-
         NotificationType.CHALLENGE_ACCEPTED -> Message(
-            title = "도전이 성사됐어!",
-            body = "${actorNickname}님이 도전을 받아쳤어",
+            title = "계약 완료.",
+            body = "${actorNickname}님이 수락했습니다",
         )
 
         NotificationType.CHALLENGE_REJECTED -> Message(
-            title = "도전이 거절됐어",
-            body = "${actorNickname}님이 도전을 피했어...",
+            title = "ㅠㅠ",
+            body = "${actorNickname}님이 도망쳤습니다",
         )
 
         // 🔴 아래 5종은 선행 feature 가 없어 트리거 자체가 존재하지 않는다.
