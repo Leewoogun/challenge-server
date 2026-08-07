@@ -7,6 +7,7 @@ jjwt = "0.12.6"
 querydsl = "5.1.0"
 wiremock = "3.9.1"
 testcontainers = "1.20.4"
+firebase-admin = "9.10.0"
 
 [libraries]
 # Spring Boot Starters
@@ -56,6 +57,10 @@ jjwt-jackson = { module = "io.jsonwebtoken:jjwt-jackson", version.ref = "jjwt" }
 
 # API Docs
 springdoc-openapi = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
+
+# Firebase Admin SDK (FCM 발송). BOM 관장 대상이 아니라 버전을 직접 고정한다.
+# ⚠️ 서비스 계정 키가 없어도 서버는 기동해야 한다 — 의존성 존재와 초기화 성공은 별개다 (push-fcm §0.4).
+firebase-admin = { module = "com.google.firebase:firebase-admin", version.ref = "firebase-admin" }
 
 # Security Test
 spring-security-test = { module = "org.springframework.security:spring-security-test" }

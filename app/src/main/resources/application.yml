@@ -47,6 +47,18 @@ kakao:
     connect-timeout-ms: 2000
     read-timeout-ms: 5000
 
+# 애플리케이션 고유 설정 (`challenge.*`). dev.test-login.enabled 도 이 네임스페이스다.
+challenge:
+  fcm:
+    # Firebase 서비스 계정 비공개 키(JSON)의 **절대 경로**.
+    #
+    # 🔴 기본값이 빈 문자열이고 그게 지금 정상 상태다 — 키가 없으면 NoOpNotificationSender 로
+    #    떨어져 **발송만** 건너뛴다. 서버는 정상 기동하고 notifications row 저장·엔드포인트는
+    #    전부 동작한다 (계약 §0.4). 잘못된 경로·손상된 JSON 도 기동을 막지 않는다(경고 로그만).
+    # 🔴 이 파일은 레포 **밖**에 둔다. .gitignore 의 *-adminsdk-*.json 등은 실수 방어이지
+    #    보관 위치가 아니다.
+    credentials-path: ${FCM_CREDENTIALS_PATH:}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

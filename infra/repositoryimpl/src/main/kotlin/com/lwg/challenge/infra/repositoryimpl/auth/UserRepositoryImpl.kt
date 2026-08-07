@@ -38,4 +38,10 @@ class UserRepositoryImpl(
     override fun updateRefreshTokenHash(userId: Long, hash: String?, issuedAt: LocalDateTime?) {
         jpa.updateRefreshTokenHash(userId, hash, issuedAt)
     }
+
+    override fun clearFcmTokenOwnedByOthers(fcmToken: String, exceptUserId: Long): Int =
+        jpa.clearFcmTokenOwnedByOthers(fcmToken, exceptUserId)
+
+    override fun updateFcmToken(userId: Long, fcmToken: String?): Int =
+        jpa.updateFcmToken(userId, fcmToken)
 }

@@ -165,6 +165,28 @@ class AuthService(
     }
 
     /**
+     * 로그아웃 (push-fcm T-B2). 서버가 쥐고 있는 **기기 귀속 상태 두 개**를 함께 끊는다.
+     *
+     * 1. `refresh_token_hash = NULL` — ADR-0009 rotation 무효화. 이후 그 기기의 refresh 는
+     *    hash 불일치로 401 을 받고 재로그인으로 떨어진다.
+     * 2. `fcm_token = NULL` — 그 기기로 이 계정 앞으로 오던 푸시가 더는 가지 않는다.
+     *
+     * **둘을 한 메서드에 묶는 것이 핵심이다.** 하나만 끊으면 "로그아웃했는데 알림은 계속 온다"
+     * 또는 "알림은 끊겼는데 세션은 살아 있다"는 어긋난 상태가 남는다.
+     *
+     * **멱등하다** — 이미 로그아웃된 사용자를 다시 불러도, 심지어 탈퇴로 row 가 사라졌어도 예외
+     * 없이 성공한다. 두 UPDATE 모두 조건 없는 NULL 대입이라 재실행이 무해하고, 영향 row 0 건은
+     * "이미 그 상태"와 구분할 필요가 없다. 🔴 여기서 404/401 을 던지면 **로그아웃이 실패해
+     * 클라이언트가 로그인 상태에 갇힌다** — 로그아웃은 언제나 성공해야 하는 연산이다.
+     */
+    @Transactional
+    fun logout(userId: Long) {
+        userRepository.updateRefreshTokenHash(userId, hash = null, issuedAt = null)
+        userRepository.updateFcmToken(userId, fcmToken = null)
+        log.info("로그아웃: userId={} (refresh hash + fcm token 무효화)", userId)
+    }
+
+    /**
      * 카카오 호출 예외를 우리 에러 응답 체계로 변환.
      */
     private inline fun <T> mapKakaoExceptions(stage: String, action: () -> T): T = try {

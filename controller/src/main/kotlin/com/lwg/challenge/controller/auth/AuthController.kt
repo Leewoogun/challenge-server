@@ -7,6 +7,7 @@ import com.lwg.challenge.controller.auth.dto.RefreshData
 import com.lwg.challenge.controller.auth.dto.RefreshRequest
 import com.lwg.challenge.controller.auth.dto.RefreshResponse
 import com.lwg.challenge.controller.common.BaseResponse
+import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.service.auth.AuthService
 import com.lwg.challenge.service.auth.LoginResult
 import com.lwg.challenge.service.auth.RefreshResult
@@ -14,6 +15,7 @@ import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.validation.Valid
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -59,13 +61,36 @@ class AuthController(
         )
     }
 
+    /**
+     * 로그아웃 (push-fcm T-B2, 계약 §2). Sprint 0 스텁을 실구현으로 채운 것이며 **응답 shape 은 그대로**다.
+     *
+     * `refresh_token_hash` 와 `fcm_token` 을 함께 NULL 로 만든다. 멱등하므로 이미 로그아웃된
+     * 상태에서 다시 불러도 200 이다 (상세 근거는 `AuthService.logout` KDoc).
+     *
+     * 인증이 필요하다 — SecurityConfig 의 permitAll 목록에 `/logout` 은 **없고**
+     * `.anyRequest().authenticated()` 에 걸린다. 즉 여기 도달한 시점에 principal 은 항상 존재한다.
+     */
     @DeleteMapping("/logout")
     @Operation(
         summary = "로그아웃",
-        description = "Sprint 0: stub — BaseResponse 성공만 반환. Sprint 2+ 에서 Refresh blacklist + FCM 토큰 제거.",
+        description = "refresh_token_hash 와 fcm_token 을 NULL 로 만든다. 멱등하며 응답 body 에 data 가 없다.",
     )
     @SecurityRequirement(name = "bearerAuth")
     fun logout(): BaseResponse {
+        authService.logout(currentUserId())
         return BaseResponse()
+    }
+
+    /** principal 에서 userId 추출. 다른 컨트롤러(UserController/FriendController)와 동일한 헬퍼다. */
+    private fun currentUserId(): Long {
+        val auth = SecurityContextHolder.getContext().authentication
+            ?: throw UnauthorizedException("인증이 필요합니다")
+        return when (val principal = auth.principal) {
+            is Long -> principal
+            is Number -> principal.toLong()
+            is String -> principal.toLongOrNull()
+                ?: throw UnauthorizedException("인증 정보가 올바르지 않습니다")
+            else -> throw UnauthorizedException("인증 정보가 올바르지 않습니다")
+        }
     }
 }

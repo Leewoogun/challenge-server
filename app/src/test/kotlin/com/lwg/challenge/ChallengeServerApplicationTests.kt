@@ -5,6 +5,7 @@ import com.lwg.challenge.infra.jpa.auth.UserJpaRepository
 import com.lwg.challenge.infra.jpa.challenge.ChallengeJpaRepository
 import com.lwg.challenge.infra.jpa.contract.ContractJpaRepository
 import com.lwg.challenge.infra.jpa.friend.FriendshipJpaRepository
+import com.lwg.challenge.infra.jpa.notification.NotificationJpaRepository
 import com.lwg.challenge.infra.jpa.userrecord.UserRecordJpaRepository
 import com.lwg.challenge.infra.jpa.verification.VerificationJpaRepository
 import org.junit.jupiter.api.Test
@@ -56,6 +57,10 @@ class ChallengeServerApplicationTests {
     // soul-oath (T-B2) — ContractRepositoryImpl / ChallengeCommandService / ChallengeDetailService 의존성 충족용.
     @MockitoBean
     lateinit var contractRepository: ContractJpaRepository
+
+    // push-fcm (T-B5) — NotificationRepositoryImpl / NotificationDispatcher 의존성 충족용.
+    @MockitoBean
+    lateinit var notificationRepository: NotificationJpaRepository
 
     // KakaoOAuthClient는 실제로는 @Component라 생성되지만, 테스트 환경에서 네트워크 호출되면 안 되므로 mock.
     @MockitoBean

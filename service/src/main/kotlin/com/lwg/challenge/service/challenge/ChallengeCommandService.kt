@@ -14,11 +14,14 @@ import com.lwg.challenge.domain.contract.SignatureValidator
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.friend.FriendshipRepository
 import com.lwg.challenge.domain.friend.FriendshipStatus
+import com.lwg.challenge.domain.notification.NotificationType
 import com.lwg.challenge.domain.user.UserRepository
 import com.lwg.challenge.domain.user.UserStatus
 import com.lwg.challenge.domain.verification.Verification
 import com.lwg.challenge.domain.verification.VerificationRepository
 import com.lwg.challenge.domain.verification.VerificationStatus
+import com.lwg.challenge.service.notification.ChallengeNotificationEvent
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -51,6 +54,14 @@ class ChallengeCommandService(
     private val verificationRepository: VerificationRepository,
     private val contractRepository: ContractRepository,
     private val clock: Clock,
+    /**
+     * 알림 이벤트 발행 (push-fcm T-B5).
+     *
+     * 🔴 **여기서 발송하지 않고 이벤트만 던진다.** 발송을 이 트랜잭션에 묶으면 FCM 실패가
+     * 챌린지 생성·수락·거절을 롤백시킨다 — *"알림이 안 갔다"* 는 불편이지만 *"챌린지가 안 걸렸다"* 는
+     * 기능 실패다 (계약 §0.3). `NotificationDispatcher` 가 `AFTER_COMMIT` 으로 받는다.
+     */
+    private val eventPublisher: ApplicationEventPublisher,
 ) {
 
     // ─── 1. 신청 ─────────────────────────────────────────────────
@@ -148,6 +159,13 @@ class ChallengeCommandService(
             ),
         )
 
+        publishNotification(
+            recipientId = opponentId,
+            actorId = me,
+            type = NotificationType.CHALLENGE_REQUEST,
+            challengeId = challengeId,
+        )
+
         return created
     }
 
@@ -231,6 +249,14 @@ class ChallengeCommandService(
             throw OneButtonDialogException(MSG_ALREADY_HANDLED)
         }
 
+        // 수락을 알리는 대상은 **신청자**다. 수락한 본인(me)이 아니다.
+        publishNotification(
+            recipientId = challenge.challengerId,
+            actorId = me,
+            type = NotificationType.CHALLENGE_ACCEPTED,
+            challengeId = challengeId,
+        )
+
         return accepted
     }
 
@@ -245,7 +271,18 @@ class ChallengeCommandService(
     @Transactional
     fun reject(me: Long, challengeId: Long): Challenge {
         val challenge = loadForResponse(challengeId, me, expectedActor = Actor.OPPONENT)
-        return challengeRepository.save(challenge.copy(status = ChallengeStatus.REJECTED))
+        val rejected = challengeRepository.save(challenge.copy(status = ChallengeStatus.REJECTED))
+
+        // 거절도 **신청자**에게 알린다. 기획서에 없던 공백이었다 —
+        // 신청자는 상대가 거절했는지 알 방법이 홈 재방문뿐이었다.
+        publishNotification(
+            recipientId = challenge.challengerId,
+            actorId = me,
+            type = NotificationType.CHALLENGE_REJECTED,
+            challengeId = challengeId,
+        )
+
+        return rejected
     }
 
     // ─── 5. 취소 (챌린저가 보낸 PENDING 회수) ─────────────────────
@@ -345,6 +382,32 @@ class ChallengeCommandService(
             throw SnackbarException(message)
         }
         return trimmed
+    }
+
+    /**
+     * 알림 이벤트를 발행한다. **트랜잭션 안에서 부르지만 발송은 커밋 후에 일어난다** (계약 §0.3).
+     *
+     * 🔴 **이 호출이 실패해도 챌린지는 성립해야 한다.** `publishEvent` 자체는 리스너를 등록만 하고
+     * 즉시 실행하지 않으므로(`AFTER_COMMIT`) 여기서 FCM 이나 DB 를 건드리지 않는다 — 즉 이 줄은
+     * 트랜잭션에 위험을 더하지 않는다. 실제 처리 중 터지는 예외는
+     * [com.lwg.challenge.service.notification.NotificationDispatcher] 가 삼킨다.
+     *
+     * 롤백되면 커밋이 없으므로 리스너가 아예 실행되지 않는다 — **롤백 시 미발송이 공짜로 성립한다.**
+     */
+    private fun publishNotification(
+        recipientId: Long,
+        actorId: Long,
+        type: NotificationType,
+        challengeId: Long,
+    ) {
+        eventPublisher.publishEvent(
+            ChallengeNotificationEvent(
+                recipientId = recipientId,
+                actorId = actorId,
+                type = type,
+                challengeId = challengeId,
+            ),
+        )
     }
 
     private fun pendingVerification(challengeId: Long, userId: Long, createdAt: LocalDateTime) =

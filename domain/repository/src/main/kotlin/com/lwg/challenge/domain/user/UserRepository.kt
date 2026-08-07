@@ -47,4 +47,27 @@ interface UserRepository {
      * @param issuedAt rotation 시각. hash 가 null 일 때는 같이 null 권장.
      */
     fun updateRefreshTokenHash(userId: Long, hash: String?, issuedAt: LocalDateTime?)
+
+    /**
+     * 같은 FCM 토큰을 쥐고 있는 **다른** 사용자들의 `fcm_token` 을 NULL 로 밀어낸다.
+     *
+     * 🔴 **한 기기가 두 계정의 알림을 받는 것을 막는 유일한 장치다** (push-fcm 계약 §0.2).
+     * `users.fcm_token` 에 UNIQUE 제약이 없으므로 DB 가 이걸 대신 보장해 주지 않는다.
+     *
+     * logout([updateFcmToken] 에 null) 이 대부분의 계정 전환을 덮지만, 앱 삭제·강제 종료·토큰 만료로
+     * logout 이 아예 호출되지 않는 경로가 남는다. 그래서 **등록 시점에도** 방어한다.
+     *
+     * @param fcmToken 이번에 등록되는 토큰
+     * @param exceptUserId 이 사용자(=등록 주체)는 건드리지 않는다
+     * @return NULL 로 밀린 row 수. 정상 흐름에서는 0 이고, 계정 전환 직후에만 1 이 나온다.
+     */
+    fun clearFcmTokenOwnedByOthers(fcmToken: String, exceptUserId: Long): Int
+
+    /**
+     * 특정 사용자의 `fcm_token` 만 갱신한다. null 이면 제거(로그아웃).
+     *
+     * @return 갱신된 row 수. 0 이면 해당 user 가 DB 에 없다는 뜻이다
+     *         (탈퇴·삭제된 계정의 access token 이 아직 유효한 경우).
+     */
+    fun updateFcmToken(userId: Long, fcmToken: String?): Int
 }

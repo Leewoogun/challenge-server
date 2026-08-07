@@ -16,12 +16,14 @@ import com.lwg.challenge.domain.friend.Friendship
 import com.lwg.challenge.domain.friend.FriendshipRepository
 import com.lwg.challenge.domain.friend.FriendshipStatus
 import com.lwg.challenge.domain.friend.UserSearchResult
+import com.lwg.challenge.domain.notification.NotificationType
 import com.lwg.challenge.domain.user.User
 import com.lwg.challenge.domain.user.UserRepository
 import com.lwg.challenge.domain.user.UserStatus
 import com.lwg.challenge.domain.verification.Verification
 import com.lwg.challenge.domain.verification.VerificationRepository
 import com.lwg.challenge.domain.verification.VerificationStatus
+import com.lwg.challenge.service.notification.ChallengeNotificationEvent
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -29,6 +31,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.springframework.context.ApplicationEventPublisher
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -70,6 +73,15 @@ class ChallengeCommandServiceTest {
     private val verifications = FakeVerificationRepository()
     private val contracts = FakeContractRepository()
 
+    /**
+     * 발행된 알림 이벤트를 모아 두는 fake (push-fcm T-B5).
+     *
+     * ⚠️ **여기서 볼 수 있는 것은 "무엇을 발행했는가" 뿐이다.** `publishEvent` 를 그대로 기록할 뿐,
+     * *커밋된 뒤에만 리스너가 돈다* 는 보장은 Spring 의 `@TransactionalEventListener(AFTER_COMMIT)`
+     * 이 하며 이 테스트는 트랜잭션 없이 돈다. 즉 **"롤백 시 미발송"을 이 파일이 증명하지는 않는다.**
+     */
+    private val events = RecordingEventPublisher()
+
     private fun service(clock: Clock = this.clock) = ChallengeCommandService(
         challengeRepository = challenges,
         friendshipRepository = friendships,
@@ -77,6 +89,7 @@ class ChallengeCommandServiceTest {
         verificationRepository = verifications,
         contractRepository = contracts,
         clock = clock,
+        eventPublisher = events,
     )
 
     private fun seedUsersAndFriendship() {
@@ -728,6 +741,86 @@ class ChallengeCommandServiceTest {
         assertEquals(ChallengeStatus.REJECTED, challenges.all().single().status)
     }
 
+    // ─── 알림 이벤트 발행 (push-fcm T-B5) ─────────────────────────
+    //
+    // 🔴 여기서 검증하는 것은 **수신자와 타입**이다. 발송 자체는 커밋 후 리스너의 몫이고,
+    //    "누구에게 가는가" 를 여기서 틀리면 상대에게 갈 알림이 본인에게 간다.
+
+    @Test
+    fun `신청하면 상대에게 CHALLENGE_REQUEST 이벤트가 발행된다`() {
+        seedUsersAndFriendship()
+
+        val created = service().createSigned(me, friend, "운동", "커피", DeadlineType.TODAY)
+
+        val event = events.challengeEvents().single()
+        assertEquals(NotificationType.CHALLENGE_REQUEST, event.type)
+        assertEquals(friend, event.recipientId, "신청 알림은 **상대**가 받는다")
+        assertEquals(me, event.actorId)
+        assertEquals(created.id, event.challengeId)
+    }
+
+    @Test
+    fun `수락하면 신청자에게 CHALLENGE_ACCEPTED 이벤트가 발행된다`() {
+        seedUsersAndFriendship()
+        // friend 가 me 에게 신청 → me 가 수락한다.
+        val id = service().createSigned(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+        events.clear()
+
+        service().acceptSigned(me, id, "책 30페이지")
+
+        val event = events.challengeEvents().single()
+        assertEquals(NotificationType.CHALLENGE_ACCEPTED, event.type)
+        // 🔴 수락한 본인(me)이 아니라 **신청자(friend)** 가 받는다. 뒤바뀌면 자기 알림을 자기가 받는다.
+        assertEquals(friend, event.recipientId)
+        assertEquals(me, event.actorId)
+        assertEquals(id, event.challengeId)
+    }
+
+    @Test
+    fun `거절하면 신청자에게 CHALLENGE_REJECTED 이벤트가 발행된다`() {
+        seedUsersAndFriendship()
+        val id = service().createSigned(friend, me, "운동", "커피", DeadlineType.TODAY).id!!
+        events.clear()
+
+        service().reject(me, id)
+
+        val event = events.challengeEvents().single()
+        assertEquals(NotificationType.CHALLENGE_REJECTED, event.type)
+        assertEquals(friend, event.recipientId)
+        assertEquals(me, event.actorId)
+    }
+
+    /**
+     * 요청이 거부되면 이벤트도 없어야 한다.
+     *
+     * 실패 경로에서 발행하면 **일어나지 않은 일에 대한 알림**이 나간다. 트랜잭션 롤백은
+     * 이미 발행된 이벤트를 되돌려 주지만(커밋이 없으면 `AFTER_COMMIT` 리스너가 안 돈다),
+     * 애초에 발행 지점이 성공 경로 뒤에 있어야 그 보장에 기대지 않는다.
+     */
+    @Test
+    fun `신청이 거부되면 이벤트를 발행하지 않는다`() {
+        seedUsersAndFriendship()
+
+        assertThrows<BusinessException> {
+            // 친구가 아닌 상대 → SnackbarException
+            service().createSigned(me, stranger, "운동", "커피", DeadlineType.TODAY)
+        }
+
+        assertTrue(events.challengeEvents().isEmpty(), "실패한 신청에 알림이 발행됐다: ${events.challengeEvents()}")
+    }
+
+    @Test
+    fun `취소는 알림을 발행하지 않는다`() {
+        seedUsersAndFriendship()
+        val id = service().createSigned(me, friend, "운동", "커피", DeadlineType.TODAY).id!!
+        events.clear()
+
+        service().cancel(me, id)
+
+        // spec 비범위 표: "상대가 아직 도전장을 보지 못한 경우가 대부분이라 알림 가치가 낮다"
+        assertTrue(events.challengeEvents().isEmpty(), "취소에는 알림이 없어야 한다")
+    }
+
     @Test
     fun `이미 맹세를 마친 계약에는 재서명할 수 없다`() {
         seedUsersAndFriendship()
@@ -899,6 +992,30 @@ private class FakeUserRepository : UserRepository {
 
     override fun save(user: User): User = user.also { put(it) }
     override fun updateRefreshTokenHash(userId: Long, hash: String?, issuedAt: LocalDateTime?) = Unit
+
+    // FCM 토큰은 이 서비스의 관심사가 아니다. 동작 검증은 UserServiceFcmTokenTest / AuthServiceLogoutTest 가 한다.
+    override fun clearFcmTokenOwnedByOthers(fcmToken: String, exceptUserId: Long): Int = 0
+    override fun updateFcmToken(userId: Long, fcmToken: String?): Int = 1
+}
+
+/**
+ * 발행된 이벤트를 그대로 모아 두는 [ApplicationEventPublisher] (push-fcm T-B5).
+ *
+ * ⚠️ `AFTER_COMMIT` 의미를 흉내내지 **않는다** — 발행 즉시 기록한다. 트랜잭션 경계는 이 단위
+ * 테스트에 존재하지 않으므로, 여기서 알 수 있는 것은 *무엇을 발행했는가* 뿐이다.
+ */
+private class RecordingEventPublisher : ApplicationEventPublisher {
+
+    private val published = mutableListOf<Any>()
+
+    override fun publishEvent(event: Any) {
+        published += event
+    }
+
+    fun challengeEvents(): List<ChallengeNotificationEvent> =
+        published.filterIsInstance<ChallengeNotificationEvent>()
+
+    fun clear() = published.clear()
 }
 
 private class FakeVerificationRepository : VerificationRepository {
