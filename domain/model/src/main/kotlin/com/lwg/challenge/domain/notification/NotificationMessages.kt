@@ -8,11 +8,20 @@ package com.lwg.challenge.domain.notification
  * | 타입 | 상태 |
  * |---|---|
  * | `CHALLENGE_REQUEST` | ✅ **사용자 확정 (2026-08-07)** — 격식체 |
- * | `CHALLENGE_ACCEPTED` / `CHALLENGE_REJECTED` | 🟡 **초안값** — 반말. 디자인 확인 후 바뀔 수 있다 |
+ * | `CHALLENGE_ACCEPTED` / `CHALLENGE_REJECTED` | 🟡 **초안값** — 디자인 확인 후 바뀔 수 있다 |
+ * | `OPPONENT_VERIFIED` | 🟡 **초안값 (2026-08-14 추가)** — challenge-verification T-B4 |
  *
- * ⚠️ **지금 세 종의 톤이 갈려 있다** (격식체 1 / 반말 2). `CHALLENGE_REQUEST` 는 제품 개념명을
- * 제목으로 쓰는 계약 제안이라 격식체가 의도된 것이고, 나머지 둘은 아직 초안이다.
- * **나머지 둘도 확정할 때 톤을 맞출지 갈라둘지 함께 정해야 한다** — 지금 상태를 "일관성 결함"으로
+ * ⚠️ **지금 네 종의 톤이 갈려 있다. 단 갈린 축은 `title` 이지 존댓말/반말이 아니다.**
+ * `body` 는 **넷 다 합니다체**다 (`~하시렵니까?` / `~수락했습니다` / `~도망쳤습니다` / `~올렸습니다`).
+ * 갈리는 것은 제목이다 — `영혼의 맹세`(제품 개념명) / `계약 완료.`(평서 단정) / `ㅠㅠ`(구어) /
+ * `증거 도착`(사실 통보).
+ * `CHALLENGE_REQUEST` 는 제품 개념명을 제목으로 쓰는 계약 제안이라 격식체가 의도된 것이고,
+ * 나머지 셋은 아직 초안이다.
+ *
+ * 🔴 **이 표가 한때 나머지 둘을 "반말" 이라고 적었다. 사실이 아니었다** — `e76c64c` 가 문자열을
+ * 존댓말로 교체하면서 상태 표기를 함께 고치지 못한 흔적이다. **톤을 확정할 사람이 이 표를 보고
+ * 판단하므로, 표가 현재 톤을 잘못 말하면 판단 자체가 틀어진다.**
+ * **나머지 셋도 확정할 때 톤을 맞출지 갈라둘지 함께 정해야 한다** — 지금 상태를 "일관성 결함"으로
  * 보고 임의로 통일하지 마라. 확정분을 초안에 맞추는 방향은 특히 안 된다.
  *
  * **그래서 문자열을 코드 곳곳에 흩지 않고 여기 모았다.** 문구가 확정되면 이 파일만 고치면 되고,
@@ -60,10 +69,26 @@ object NotificationMessages {
             body = "${actorNickname}님이 도망쳤습니다",
         )
 
-        // 🔴 아래 5종은 선행 feature 가 없어 트리거 자체가 존재하지 않는다.
+        // 🟡 **초안값 (challenge-verification T-B4, 2026-08-14).** 사용자 확정 대상이다.
+        //
+        // 🔴 위 세 종에 톤을 맞추지 않았다. KDoc 이 "임의로 통일하지 마라, 확정분을 초안에 맞추는
+        //    방향은 특히 안 된다" 고 명시하므로, 제목은 이 알림이 알리는 사실 그대로 뒀다.
+        //    (`body` 만 나머지와 같은 합니다체다 — 그건 원래 넷이 공통이던 축이다.)
+        //
+        // ⚠️ **이 한 줄이 발송 스위치다.** push-fcm 계약 §0.6.1 이 "문구 추가 = 발송 개시" 로
+        //    규정했고, 지우면 그 타입의 발송이 즉시 멈춘다(dispatcher 가 null 을 보고 건너뛴다).
+        //    2026-08-14 에 절차를 밟고 열었다 — verif-mobile 이 `PushEvent.OpponentVerified` 와
+        //    딥링크(`Route.Challenge.Detail`)를 반영하고 회신한 뒤에 넣었다.
+        //    **다음에 새 타입을 열 때도 같은 순서를 지켜라. 여기 먼저 쓰면 구버전 앱에서
+        //    "눌러도 아무 데도 안 가는" 조용한 실패가 난다.**
+        NotificationType.OPPONENT_VERIFIED -> Message(
+            title = "증거 도착",
+            body = "${actorNickname}님이 인증 사진을 올렸습니다",
+        )
+
+        // 🔴 아래 4종은 선행 feature 가 없어 트리거 자체가 존재하지 않는다.
         // 각 feature 가 붙을 때 문구를 여기에 추가하면 배관은 그대로 재사용된다.
         NotificationType.REMIND,
-        NotificationType.OPPONENT_VERIFIED,
         NotificationType.RESULT,
         NotificationType.TAUNT,
         NotificationType.FRIEND_REQUEST,

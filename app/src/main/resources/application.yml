@@ -27,6 +27,17 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  # 인증 사진 multipart 업로드 (challenge-verification 계약 §3, ADR-0011 §3 개정).
+  #
+  # 🔴 **여기가 사진 크기의 유일한 강제 지점이다.** 초과분은 컨트롤러에 도달하기 전에
+  #    MaxUploadSizeExceededException 으로 끊기고, GlobalExceptionHandler 가 code 700 으로 바꾼다.
+  #    앱은 ~500KB 로 리사이즈해 올린다(spec T-M2) — 5MB 는 그 목표치가 아니라 **방어선**이다.
+  # request-size 가 file-size 보다 큰 것은 multipart 경계·헤더 오버헤드 몫이다.
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
 server:
   port: 8080
 
@@ -58,6 +69,22 @@ challenge:
     # 🔴 이 파일은 레포 **밖**에 둔다. .gitignore 의 *-adminsdk-*.json 등은 실수 방어이지
     #    보관 위치가 아니다.
     credentials-path: ${FCM_CREDENTIALS_PATH:}
+
+  # 인증 사진 저장 (ADR-0011 — 서버 로컬 폴더 + PhotoStorage 포트).
+  #
+  # 🔴 FCM 과 달리 **fail-safe 로 떨어지지 않는다.** 푸시는 없어도 앱이 동작하지만 사진 저장은
+  #    없으면 인증 자체가 불가능하다. 저장 루트를 못 만들면 기동 시점에 터진다.
+  #
+  # 🔴 서명 비밀값이 더는 필요 없다 — 조회 서명 URL 폐기(2026-08-18 2차 결정)로 서명 체계가
+  #    통째로 사라졌다. CHALLENGE_PHOTO_SIGNING_SECRET / CHALLENGE_PHOTO_PUBLIC_BASE_URL
+  #    환경변수도 함께 소멸했다. 사진 접근은 일반 JWT 인증 엔드포인트가 한다.
+  photo:
+    # 저장 루트. 🔴 레포 **밖**이 기본값이다 — ./ 아래면 git status 에 사진이 뜨고
+    # ./gradlew clean 이 지울 수 있다. "재기동 후에도 사진이 보인다"(spec 수용 기준)가
+    # 기본값 상태에서 성립해야 한다.
+    # 상대 경로는 서버 실행 디렉터리(challenge-server/) 기준 — ../challenge-image 는
+    # challenge/ 아래의 형제 폴더다.
+    storage-root: ${CHALLENGE_PHOTO_ROOT:../challenge-image}
 
 springdoc:
   api-docs:

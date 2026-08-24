@@ -56,6 +56,15 @@ class SecurityConfig(
                     //
                     // ⚠️ 따라서 **이 경로에 다른 핸들러를 매핑하면 인증 없이 공개된다.** 매핑 시 반드시 재검토할 것.
                     .requestMatchers(HttpMethod.POST, "/api/v1/auth/test-login").permitAll()
+                    // ── 인증 사진 서빙 — permitAll 이 아니다 (2026-08-18 2차 결정) ──
+                    //
+                    // 예전에는 `/api/v1/photos/**` GET 이 permitAll 이었다 — 앱이 서명 URL 에
+                    // JWT 를 붙이지 않게 하려는 것이었는데, 조회 서명 URL 자체를 폐기하면서
+                    // 그 이유가 **사라졌다.** 사진 서빙(`/api/v1/challenges/{id}/photos/{party}`)은
+                    // 이제 아래 `anyRequest().authenticated()` 가 덮는 일반 인증 엔드포인트이고,
+                    // 당사자 검사는 `VerificationService.readPhoto` 가 요청 시점에 한다.
+                    //
+                    // ⚠️ **비인증 사진 경로를 다시 만들지 마라** — 그게 이 결정이 없앤 것이다.
                     .requestMatchers(
                         swaggerUiAll,
                         "/swagger-ui.html",

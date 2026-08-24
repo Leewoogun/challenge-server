@@ -16,8 +16,13 @@ import com.lwg.challenge.controller.challenge.dto.ChallengeCreateResponse
 import com.lwg.challenge.controller.challenge.dto.ChallengeDetailData
 import com.lwg.challenge.controller.challenge.dto.ChallengeDetailResponse
 import com.lwg.challenge.controller.challenge.dto.ChallengeStatusData
+import com.lwg.challenge.controller.challenge.dto.ChallengeVerificationsData
+import com.lwg.challenge.controller.challenge.dto.ChallengeVerificationsResponse
 import com.lwg.challenge.controller.challenge.dto.ContractDto
 import com.lwg.challenge.controller.challenge.dto.PartyDto
+import com.lwg.challenge.controller.challenge.dto.PartyVerificationDto
+import com.lwg.challenge.controller.challenge.dto.SubmitVerificationData
+import com.lwg.challenge.controller.challenge.dto.SubmitVerificationResponse
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengeItem
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesData
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesResponse
@@ -422,7 +427,73 @@ class WireShapeContractTest {
         assertTrue(data.path("challenger").path("mission").isNull, "mission 키가 있고 값이 null 이어야 한다")
     }
 
+    // ─── verification (challenge-verification) ───────────────────
+
+    @Test
+    fun `SubmitVerificationResponse - 제출 확정 3필드`() {
+        val data = dataOf(
+            SubmitVerificationResponse(
+                SubmitVerificationData(7L, VerificationStatus.VERIFIED, LocalDateTime.of(2026, 8, 14, 15, 32, 10)),
+            ),
+        )
+        assertKeys(setOf("challengeId", "status", "verifiedAt"), data, "SubmitVerificationData")
+        assertEquals("2026-08-14 15:32:10", data.path("verifiedAt").asText())
+    }
+
+    @Test
+    fun `ChallengeVerificationsResponse - 양측 인증 현황`() {
+        val data = dataOf(ChallengeVerificationsResponse(verificationsData()))
+        assertKeys(setOf("challengeId", "challenger", "opponent"), data, "ChallengeVerificationsData")
+        assertKeys(
+            setOf("userId", "status", "photoUrl", "verifiedAt"),
+            data.path("challenger"),
+            "PartyVerificationDto",
+        )
+        assertEquals("2026-08-14 15:32:10", data.path("challenger").path("verifiedAt").asText())
+    }
+
+    /**
+     * 🔴 아직 인증하지 않은 쪽은 두 필드가 전부 `null` 이다. **키는 남아야 한다** —
+     * `@JsonInclude(NON_NULL)` 이 켜지면 모바일 실패 모드가 조용히 바뀐다 (#24 와 같은 축).
+     *
+     * 키 부재와 값 null 은 모바일에서 서로 다른 예외라 **원문에 `"photoUrl":null` 이 실제로
+     * 있는지**까지 본다 (#24 선례).
+     */
+    @Test
+    fun `PENDING 인 쪽도 photoUrl 키가 null 로 남는다`() {
+        val response = ChallengeVerificationsResponse(verificationsData())
+        val opponent = dataOf(response).path("opponent")
+
+        assertKeys(
+            setOf("userId", "status", "photoUrl", "verifiedAt"),
+            opponent,
+            "PartyVerificationDto (PENDING)",
+        )
+        assertTrue(opponent.path("photoUrl").isNull, "photoUrl 키가 있고 값이 null 이어야 한다")
+        assertTrue(opponent.path("verifiedAt").isNull)
+        assertTrue(
+            mapper.writeValueAsString(response).contains(""""photoUrl":null"""),
+            "원문에 photoUrl 키가 null 값으로 남아 있어야 한다",
+        )
+    }
+
     // ─── fixtures ────────────────────────────────────────────────
+
+    private fun verificationsData() = ChallengeVerificationsData(
+        challengeId = 7L,
+        challenger = PartyVerificationDto(
+            userId = 1L,
+            status = VerificationStatus.VERIFIED,
+            photoUrl = "/api/v1/challenges/7/photos/challenger",
+            verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
+        ),
+        opponent = PartyVerificationDto(
+            userId = 14L,
+            status = VerificationStatus.PENDING,
+            photoUrl = null,
+            verifiedAt = null,
+        ),
+    )
 
     private fun detailData() = ChallengeDetailData(
         challengeId = 7L,

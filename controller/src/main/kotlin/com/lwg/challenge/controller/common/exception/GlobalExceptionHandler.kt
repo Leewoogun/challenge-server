@@ -7,7 +7,11 @@ import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.http.converter.HttpMessageNotReadableException
+import org.springframework.web.HttpMediaTypeNotSupportedException
 import org.springframework.web.bind.MethodArgumentNotValidException
+import org.springframework.web.multipart.MaxUploadSizeExceededException
+import org.springframework.web.multipart.MultipartException
+import org.springframework.web.multipart.support.MissingServletRequestPartException
 import org.springframework.web.servlet.NoHandlerFoundException
 import org.springframework.web.servlet.resource.NoResourceFoundException
 import org.springframework.web.bind.annotation.ExceptionHandler
@@ -112,6 +116,101 @@ class GlobalExceptionHandler {
                 error = true,
                 code = HttpStatus.NOT_FOUND.value(),
                 message = "요청한 경로를 찾을 수 없습니다",
+            )
+        )
+    }
+
+    /**
+     * multipart 업로드가 `spring.servlet.multipart.max-file-size` 를 넘은 경우 (인증 사진 제출).
+     *
+     * 이 핸들러가 없으면 [handleUncaught] 로 떨어져 **HTTP 500 + code 500** 이 나간다.
+     * 용량 초과는 **클라이언트 입력 문제**이므로 ADR-0002 규약상 비즈니스 에러
+     * (HTTP 200 + code 700)여야 한다.
+     *
+     * 🔴 **서비스 코드로는 잡을 수 없다** — `max-file-size` 초과는 서블릿 계층이
+     * **컨트롤러에 도달하기 전에** 끊는다. 상한을 강제하는 지점도, 그 초과를 사용자 문구로
+     * 바꿀 수 있는 지점도 여기뿐이다.
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException::class)
+    fun handleMaxUploadSize(e: MaxUploadSizeExceededException): ResponseEntity<BaseResponse> {
+        log.debug("multipart 용량 초과: {}", e.message)
+        return ResponseEntity.ok(
+            BaseResponse(
+                error = true,
+                code = ResponseCode.SNACKBAR_ERROR,
+                message = "사진 용량이 너무 커요 (최대 5MB)",
+            )
+        )
+    }
+
+    /**
+     * multipart 요청에 필수 part 가 빠진 경우 (인증 사진 제출의 `photo`).
+     *
+     * 이 핸들러가 없으면 [handleUncaught] 로 떨어져 **HTTP 500 + code 500** 이 나간다.
+     * part 누락은 **클라이언트 입력 문제**이므로 ADR-0002 규약상 비즈니스 에러
+     * (HTTP 200 + code 700)여야 한다. `@RequestPart` 바인딩이 컨트롤러 진입 전에 던지므로
+     * 서비스의 빈 바이트 검사에는 도달하지 못한다.
+     */
+    @ExceptionHandler(MissingServletRequestPartException::class)
+    fun handleMissingPart(e: MissingServletRequestPartException): ResponseEntity<BaseResponse> {
+        log.debug("multipart part 누락: {}", e.requestPartName)
+        return ResponseEntity.ok(
+            BaseResponse(
+                error = true,
+                code = ResponseCode.SNACKBAR_ERROR,
+                // VerificationService.MSG_PHOTO_REQUIRED 와 같은 문구. 공통 예외 처리가
+                // 특정 service 상수에 의존하지 않도록 문자열을 그대로 쓴다.
+                message = "사진을 첨부해주세요",
+            )
+        )
+    }
+
+    /**
+     * 지원하지 않는 `Content-Type` 으로 들어온 요청.
+     *
+     * 인증 사진 제출이 `consumes = multipart/form-data` 로 고정되면서(ADR-0011 §3 개정), JSON 등
+     * 다른 `Content-Type` 으로 들어온 요청은 **컨트롤러에 도달하지 못하고** 이 예외가 된다.
+     * 이 핸들러가 없으면 [handleUncaught] 로 떨어져 **HTTP 500** 이 나가는데, 이는 **클라이언트가
+     * 형식을 틀린 것**이므로 ADR-0002 규약상 비즈니스 에러(HTTP 200 + code 700)여야 한다.
+     * [handleNotReadable](깨진 JSON)과 같은 계열의 실패라 문구도 같다.
+     *
+     * 가정이 아니라 관측된 상황이다 — 앱이 아직 개정 전 계약(JSON `{photoKey}`)으로 이 경로를
+     * 호출하고 있어, 전환 기간 동안 실제로 이 예외가 발생한다.
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException::class)
+    fun handleMediaTypeNotSupported(e: HttpMediaTypeNotSupportedException): ResponseEntity<BaseResponse> {
+        log.warn("지원하지 않는 Content-Type: {}", e.contentType)
+        return ResponseEntity.ok(
+            BaseResponse(
+                error = true,
+                code = ResponseCode.SNACKBAR_ERROR,
+                message = "요청 형식이 올바르지 않습니다",
+            )
+        )
+    }
+
+    /**
+     * multipart 요청을 파싱하지 못한 경우 — **boundary 파라미터 누락**이 대표적이다.
+     * 클라이언트가 `Content-Type` 을 `application/json` 등으로 덮어써 boundary 가 사라지면
+     * 여기로 온다 (mobile-dev 실측: Ktor DefaultRequest 의 전역 `Content-Type` 이 body 의
+     * contentType 을 이긴다).
+     *
+     * 이 핸들러가 없으면 [handleUncaught] 로 떨어져 **HTTP 500 + code 500** 이 나간다.
+     * 클라이언트 입력 문제이므로 ADR-0002 규약상 비즈니스 에러(HTTP 200 + code 700)여야 한다.
+     * [handleNotReadable] / [handleMediaTypeNotSupported] 와 같은 계열의 실패라 문구도 같다.
+     *
+     * 🔴 **[MaxUploadSizeExceededException] 이 이 예외의 하위 타입**이지만, Spring 은 더 구체적인
+     * 핸들러를 고르므로 용량 초과는 그쪽 문구("사진 용량이 너무 커요 (최대 5MB)")를 그대로
+     * 유지한다. **두 핸들러의 순서에 의존하지 않는다.**
+     */
+    @ExceptionHandler(MultipartException::class)
+    fun handleMultipart(e: MultipartException): ResponseEntity<BaseResponse> {
+        log.warn("multipart 파싱 실패: {}", e.message)
+        return ResponseEntity.ok(
+            BaseResponse(
+                error = true,
+                code = ResponseCode.SNACKBAR_ERROR,
+                message = "요청 형식이 올바르지 않습니다",
             )
         )
     }

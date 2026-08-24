@@ -1,8 +1,10 @@
 package com.lwg.challenge.infra.external.firebase
 
+import com.google.api.client.json.gson.GsonFactory
 import com.google.firebase.messaging.MessagingErrorCode
 import com.lwg.challenge.domain.notification.SendResult
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 
 /**
@@ -67,5 +69,74 @@ class FcmNotificationSenderTest {
     @Test
     fun `errorCode 가 null 이면 FAILED`() {
         assertEquals(SendResult.FAILED, FcmNotificationSender.resultFor(null))
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // android 블록 (push-deeplink T-B1)
+    //
+    // ⚠️ AndroidConfig 는 공개 getter 가 없다. 그래서 firebase-admin 이 **실제로 전송에 쓰는
+    // 직렬화 경로**(@Key + JsonFactory)를 그대로 태워 JSON 원문으로 단언한다. 술어를 다시 쓰는
+    // 게 아니라 나가는 바이트를 본다.
+    // ---------------------------------------------------------------------------------------
+
+    private fun androidJson(referenceId: Long?): String =
+        GsonFactory.getDefaultInstance().toString(FcmNotificationSender.androidConfigFor(referenceId))
+
+    @Test
+    fun `referenceId 가 있으면 challenge- 접두사 tag 가 붙는다`() {
+        assertEquals("challenge-7", FcmNotificationSender.tagFor(7L))
+    }
+
+    /**
+     * 🔴 **`"challenge-null"` 이 되면 안 된다.**
+     *
+     * 그 문자열로 뭉치면 서로 무관한 알림들이 한 덩어리가 되어 서로를 덮어쓴다 — 예외도 로그도
+     * 없이 알림이 사라지는 사고다. `putData` 가 `challengeId` 키를 조건부로 넣는 것과 같은 판단.
+     */
+    @Test
+    fun `referenceId 가 null 이면 tag 를 만들지 않는다`() {
+        assertNull(FcmNotificationSender.tagFor(null))
+    }
+
+    @Test
+    fun `tag 가 android notification 에 실린다`() {
+        assertEquals("""{"notification":{"tag":"challenge-7"},"priority":"high"}""", androidJson(7L))
+    }
+
+    /** tag 가 없으면 `android.notification` 블록 자체가 나가지 않는다 — 빈 tag 를 보내지 않는다. */
+    @Test
+    fun `referenceId 가 null 이면 android notification 블록이 아예 없다`() {
+        assertEquals("""{"priority":"high"}""", androidJson(null))
+    }
+
+    /**
+     * 🔴 **`android.notification` 에 title/body 가 새어 들어가면 안 된다.**
+     *
+     * FCM 은 `android.notification` 의 **설정된 필드만** 공통 `notification` 을 덮어쓴다. 여기에
+     * 빈 title/body 가 실리면 트레이에 **제목 없는 알림**이 뜨고, 그건 `push-fcm` 의 `confirmed`
+     * 계약 §3 문구 3종이 통째로 무력화되는 것이다. tag 하나만 나가는지 원문으로 고정한다.
+     */
+    @Test
+    fun `android notification 은 tag 외에 아무 필드도 싣지 않는다`() {
+        val notificationBlock = androidJson(7L).substringAfter(""""notification":""").substringBefore(",\"priority")
+
+        assertEquals(
+            """{"tag":"challenge-7"}""",
+            notificationBlock,
+            "title/body 가 여기 실리면 공통 notification 을 덮어써 계약 §3 문구가 무력화된다",
+        )
+    }
+
+    /**
+     * priority 는 **오늘의 실효 동작을 명시로 고정**한 것이다 — FCM 은 `notification` 을 포함한
+     * 메시지를 이미 high 로 취급한다. 나중에 data-only 로 바뀌어도 즉시성이 조용히 normal 로
+     * 떨어지지 않게 한다. 배치 타입(`RESULT`/`REMIND`)이 붙을 때 재검토 대상 (프로덕션 KDoc 참조).
+     */
+    @Test
+    fun `priority 는 referenceId 유무와 무관하게 high`() {
+        assertEquals(
+            listOf(true, true),
+            listOf(7L, null).map { """"priority":"high"""" in androidJson(it) },
+        )
     }
 }

@@ -13,20 +13,30 @@ import org.junit.jupiter.api.Test
  * 그 깨짐이 아무것도 알려주지 않는다.**
  *
  * 대신 **바뀌지 않을 성질**만 고정한다:
- * - 이번 범위 3종은 문구가 있다
+ * - 발송 가능한 타입은 문구가 있다
  * - 아직 트리거가 없는 타입은 null 이다 (= 발송하지 않는다)
  * - 본문에 상대 닉네임이 들어간다
  */
 class NotificationMessagesTest {
 
+    /**
+     * **오늘 실제로 발송되는 타입.** 이 목록이 곧 발송 스위치의 상태다 —
+     * push-fcm 계약 §0.6.1 이 *"문구 추가 = 발송 개시"* 로 규정했기 때문이다.
+     *
+     * 🔴 **여기에 타입을 추가하기 전에 모바일 통지·회신이 선행해야 한다.**
+     * `OPPONENT_VERIFIED` 는 2026-08-14 에 그 절차를 밟고 들어왔다
+     * (challenge-verification 계약 §0.5 — `verif-mobile` 이 `PushEvent.OpponentVerified` 와
+     * 딥링크를 반영하고 회신한 뒤에 열었다).
+     */
     private val inScope = listOf(
         NotificationType.CHALLENGE_REQUEST,
         NotificationType.CHALLENGE_ACCEPTED,
         NotificationType.CHALLENGE_REJECTED,
+        NotificationType.OPPONENT_VERIFIED,
     )
 
     @Test
-    fun `이번 범위 3종은 제목과 본문이 있다`() {
+    fun `발송 가능한 타입은 제목과 본문이 있다`() {
         inScope.forEach { type ->
             val message = NotificationMessages.of(type, "지연")
             assertNotNull(message, "$type 문구가 없다")
