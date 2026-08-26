@@ -42,6 +42,9 @@ import com.lwg.challenge.controller.friend.dto.SendFriendRequestResponse
 import com.lwg.challenge.controller.friend.dto.UserSearchData
 import com.lwg.challenge.controller.friend.dto.UserSearchItem
 import com.lwg.challenge.controller.friend.dto.UserSearchResponse
+import com.lwg.challenge.controller.ranking.dto.LoserRankingData
+import com.lwg.challenge.controller.ranking.dto.LoserRankingItem
+import com.lwg.challenge.controller.ranking.dto.LoserRankingResponse
 import com.lwg.challenge.controller.record.dto.RecordData
 import com.lwg.challenge.controller.record.dto.RecordResponse
 import com.lwg.challenge.controller.user.dto.UserInfoData
@@ -231,6 +234,68 @@ class WireShapeContractTest {
     fun `RecordResponse - 전적 4필드`() {
         val data = dataOf(RecordResponse(RecordData(1, 2, 3, 4)))
         assertKeys(setOf("win", "lose", "draw", "currentStreak"), data, "RecordData")
+    }
+
+    // ─── ranking ─────────────────────────────────────────────────
+
+    /**
+     * 🔴 `profileImageUrl = null` 인 항목으로 고정한다 — 랭킹 목록에서 **프로필 없는 사용자가
+     * 다수**라 이 필드는 대부분의 항목에서 null 로 흐른다. `@JsonInclude(NON_NULL)` 이 켜지면
+     * 그 항목들에서 키가 통째로 사라지고, 모바일 실패 모드가 `JsonConvertException` →
+     * `MissingFieldException` 으로 조용히 바뀐다 (#24 와 같은 축).
+     *
+     * `isMe` 도 함께 못박는다 — 앱이 "나" 를 찾는 유일한 신호가 이 키다(userId 대조가 아니라).
+     * 사라지면 Kotlin `Boolean` 기본값이 없어 파싱이 터지거나, 있어도 아무도 강조되지 않는다.
+     */
+    @Test
+    fun `LoserRankingResponse - 랭킹 목록 + 항목 9필드`() {
+        val response = LoserRankingResponse(
+            LoserRankingData(
+                listOf(
+                    LoserRankingItem(
+                        rank = 1,
+                        userId = 3L,
+                        nickname = "준혁",
+                        profileImageUrl = null,
+                        isMe = false,
+                        losses = 25,
+                        lossRate = 78,
+                        currentLossStreak = 7,
+                        totalChallenges = 32,
+                    ),
+                    LoserRankingItem(
+                        rank = 2,
+                        userId = 1L,
+                        nickname = "나",
+                        profileImageUrl = "https://cdn.example.com/p/1.jpg",
+                        isMe = true,
+                        losses = 12,
+                        lossRate = 30,
+                        currentLossStreak = 0,
+                        totalChallenges = 40,
+                    ),
+                ),
+            ),
+        )
+        val data = dataOf(response)
+        assertKeys(setOf("rankings"), data, "LoserRankingData")
+
+        val item = data.path("rankings").first()
+        assertKeys(
+            setOf(
+                "rank", "userId", "nickname", "profileImageUrl",
+                "isMe", "losses", "lossRate", "currentLossStreak",
+                "totalChallenges",
+            ),
+            item,
+            "LoserRankingItem",
+        )
+        assertTrue(item.path("profileImageUrl").isNull, "profileImageUrl 키가 있고 값이 null 이어야 한다")
+        // 키 부재와 값 null 은 모바일에서 서로 다른 예외라 원문까지 확인한다 (#24 선례).
+        assertTrue(
+            mapper.writeValueAsString(response).contains(""""profileImageUrl":null"""),
+            "원문에 profileImageUrl 키가 null 값으로 남아 있어야 한다",
+        )
     }
 
     // ─── friends ─────────────────────────────────────────────────
