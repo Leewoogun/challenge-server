@@ -74,6 +74,8 @@ class ChallengeCommandController(
             data = ChallengeDetailData(
                 challengeId = view.challengeId,
                 status = ChallengeStatus.valueOf(view.status),
+                // 역할 기준 그대로 (계약 §1). COMPLETED 가 아니면 서비스가 null 을 준다.
+                result = view.result,
                 challengeDate = view.challengeDate,
                 deadline = view.deadline,
                 betContent = view.betContent,

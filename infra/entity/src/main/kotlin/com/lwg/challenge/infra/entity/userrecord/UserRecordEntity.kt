@@ -40,6 +40,13 @@ class UserRecordEntity(
     @Column(name = "max_streak", nullable = false)
     var maxStreak: Int = 0,
 
+    /** V10 추가. 연승(`current_streak`)과 **별도 컬럼**이다 — 부호 재활용을 하지 않은 이유는 V10 주석. */
+    @Column(name = "current_loss_streak", nullable = false)
+    var currentLossStreak: Int = 0,
+
+    @Column(name = "max_loss_streak", nullable = false)
+    var maxLossStreak: Int = 0,
+
     @Column(name = "updated_at", nullable = false)
     var updatedAt: LocalDateTime = KstTime.now(),
 ) {
@@ -57,6 +64,8 @@ class UserRecordEntity(
         draws = draws,
         currentStreak = currentStreak,
         maxStreak = maxStreak,
+        currentLossStreak = currentLossStreak,
+        maxLossStreak = maxLossStreak,
         updatedAt = updatedAt,
     )
 
@@ -69,6 +78,8 @@ class UserRecordEntity(
             draws = r.draws,
             currentStreak = r.currentStreak,
             maxStreak = r.maxStreak,
+            currentLossStreak = r.currentLossStreak,
+            maxLossStreak = r.maxLossStreak,
             updatedAt = r.updatedAt,
         )
     }

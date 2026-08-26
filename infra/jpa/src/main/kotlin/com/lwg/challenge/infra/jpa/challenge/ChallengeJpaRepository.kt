@@ -36,6 +36,54 @@ interface ChallengeJpaRepository : JpaRepository<ChallengeEntity, Long> {
     ): List<ChallengeEntity>
 
     /**
+     * 최근 판정된 챌린지 — `status = 'COMPLETED' AND completed_at > :since`, `completed_at DESC`.
+     *
+     * 홈 목록의 결과 카드 (계약 §2.3). [findActiveByUser] 와 **합치지 않은** 이유는
+     * `ChallengeRepository.findRecentlyCompletedByUser` KDoc 참조 — 정렬 키가 다르다.
+     *
+     * `status` 를 파라미터가 아니라 리터럴로 박은 것은 의도다. 이 쿼리는 `COMPLETED` 만
+     * 의미가 있다 — `completed_at` 이 채워지는 상태가 그것뿐이라 다른 값을 넣으면
+     * **조건이 조용히 빈 결과가 된다.** 넣을 수 없게 만드는 편이 낫다.
+     */
+    @Query(
+        """
+        SELECT c
+          FROM ChallengeEntity c
+         WHERE (c.challengerId = :userId OR c.opponentId = :userId)
+           AND c.status = 'COMPLETED'
+           AND c.completedAt > :since
+         ORDER BY c.completedAt DESC
+        """,
+    )
+    fun findRecentlyCompletedByUser(
+        @Param("userId") userId: Long,
+        @Param("since") since: LocalDateTime,
+    ): List<ChallengeEntity>
+
+    /**
+     * 배치 판정 대상 — `status IN (:statuses) AND deadline <= :now`, deadline 오름차순.
+     *
+     * 사용자 조건이 없는 유일한 쿼리다 (배치는 전 사용자를 본다). `<=` 경계와 "실행 시각이 아니라
+     * deadline 기준" 의 근거는 `ChallengeRepository.findDueByStatus` KDoc 참조.
+     *
+     * `idx_challenges_deadline_status` 가 받는다. IN 절 빈 컬렉션 가드는 `findActiveByUser` 와
+     * 같은 이유로 호출부에 있다.
+     */
+    @Query(
+        """
+        SELECT c
+          FROM ChallengeEntity c
+         WHERE c.status IN (:statuses)
+           AND c.deadline <= :now
+         ORDER BY c.deadline ASC
+        """,
+    )
+    fun findDueByStatus(
+        @Param("statuses") statuses: Collection<String>,
+        @Param("now") now: LocalDateTime,
+    ): List<ChallengeEntity>
+
+    /**
      * 두 사용자 사이의 같은 날짜 챌린지를 **양방향**으로 조회 (중복 신청 차단).
      *
      * 방향을 구분해서 반환하지 않고 row 를 그대로 준다 — 호출부(service)가

@@ -29,8 +29,16 @@ class ChallengeRepositoryImpl(
         return jpa.findActiveByUser(userId, statuses.map { it.name }).map { it.toDomain() }
     }
 
+    override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> =
+        jpa.findRecentlyCompletedByUser(userId, since).map { it.toDomain() }
+
     override fun findById(id: Long): Challenge? =
         jpa.findById(id).map { it.toDomain() }.orElse(null)
+
+    override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> {
+        if (statuses.isEmpty()) return emptyList()
+        return jpa.findDueByStatus(statuses.map { it.name }, now).map { it.toDomain() }
+    }
 
     override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> {
         return jpa.findReceivedPending(opponentId, now).map { row ->

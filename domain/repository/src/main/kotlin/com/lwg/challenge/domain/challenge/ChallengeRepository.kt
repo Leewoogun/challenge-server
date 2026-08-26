@@ -18,6 +18,30 @@ interface ChallengeRepository {
      */
     fun findActiveByUser(userId: Long, statuses: Collection<ChallengeStatus>): List<Challenge>
 
+    /**
+     * 최근 판정된 챌린지 — `(challenger = :u OR opponent = :u) AND status = COMPLETED
+     * AND completed_at > :since`, `completed_at DESC`.
+     *
+     * 홈 목록(`/challenges/active`)이 진행 중 카드 **뒤에** 이어 붙이는 결과 카드다 (계약 §2.3).
+     *
+     * ## 🔴 [findActiveByUser] 를 확장하지 않고 메서드를 나눈 이유
+     *
+     * 두 목록은 **정렬 기준이 다르다** — 진행 중은 `deadline ASC`(급한 순, 행동 대상)이고
+     * 결과는 `completed_at DESC`(최신 순, 확인 대상)다. 한 쿼리로 합치면 상태에 따라 정렬 키가
+     * 바뀌는 `CASE` 정렬이 되고, **그게 정확히 나중에 읽을 수 없게 되는 종류의 SQL 이다.**
+     * 조회가 1회 늘지만 두 쿼리 다 인덱스를 탄다 — 목록 하나 그리는 데 쿼리 하나 더 쓰는 값으로
+     * 읽히는 SQL 을 산다.
+     *
+     * ## 🔴 `EXPIRED` 는 여기 걸리지 않는다
+     *
+     * 조건이 `status = COMPLETED` 라 만료(= 계약 미체결)는 애초에 대상이 아니다. 승부가 성립한
+     * 적이 없으므로 결과 카드로 보여줄 것도 없다 (계약 §2.3 / §3.1).
+     *
+     * @param since 이 시각 **이후**에 판정된 것만. 호출부가 `now - N일` 로 계산해 넘긴다 —
+     *   "며칠" 을 아는 것은 프로퍼티를 주입받는 서비스이지 저장소가 아니다.
+     */
+    fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge>
+
     /** id 로 단건 조회. 없으면 null. (수락/거절/취소의 권한·상태 검증 진입점) */
     fun findById(id: Long): Challenge?
 
@@ -51,6 +75,33 @@ interface ChallengeRepository {
         challengeDate: LocalDate,
         statuses: Collection<ChallengeStatus>,
     ): List<Challenge>
+
+    /**
+     * `status IN (:statuses) AND deadline <= :now` — **배치 판정 대상 선정** (challenge-result T-B1).
+     *
+     * `deadline` 오름차순. 사용자 축이 전혀 없는 유일한 조회다 — 배치는 전 사용자의 챌린지를 본다.
+     *
+     * ## 🔴 기준이 **실행 시각이 아니라 `deadline`** 이라는 게 소급 판정의 전부다
+     *
+     * "지난 자정에 마감된 것" 을 찾는 게 아니라 "마감이 이미 지난 것" 을 전부 찾는다. 그래서
+     * 서버가 자정에 죽어 있었든 사흘을 죽어 있었든, **다음 실행 한 번이 밀린 분을 전부 집는다.**
+     * 스케줄러는 "언제 볼까" 만 정하고 소급성은 이 쿼리가 보장한다 — 재시도 큐도, 마지막 실행
+     * 시각을 기록하는 테이블도 필요 없는 이유다.
+     *
+     * ## 🔴 경계는 `<=` 다 — 마감 정각을 **포함**한다
+     *
+     * [findReceivedPending] 의 `deadline > :now` 와 정확히 상보적이다. 정각이 되는 순간 그쪽
+     * 목록에서 사라지고 이쪽 판정 대상이 된다 — 두 조건 사이에 **어느 쪽에도 속하지 않는 틈이
+     * 없다.** (accept 경로의 `KstDeadlineCalculator.isExpired` 는 `<` 로 사용자에게 유리한 쪽을
+     * 택하는데, 배치는 00:05 에 도므로 정각 동시성이 실제로 발생하지 않는다.)
+     *
+     * `idx_challenges_deadline_status` 가 이 조회를 받는다 (V1__init.sql).
+     *
+     * @param statuses 대상 상태. `IN_PROGRESS` 면 판정 대상, `PENDING` 이면 만료 대상이다 —
+     *   둘은 처리가 완전히 달라서(전적 집계 유무) 호출부가 따로 부른다.
+     * @param now 마감 비교 기준 시각. **KST LocalDateTime** — `challenges.deadline` 과 같은 축이어야 한다 (ADR-0010).
+     */
+    fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge>
 
     /** 저장 (id == null 이면 INSERT, 있으면 MERGE). 상태 전이(수락/거절)에 사용. */
     fun save(challenge: Challenge): Challenge

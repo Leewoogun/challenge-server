@@ -30,6 +30,11 @@ testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.
 # Spring (non-starter)
 spring-context = { module = "org.springframework:spring-context" }
 spring-tx = { module = "org.springframework:spring-tx" }
+# ApplicationReadyEvent 등 부트 생명주기 이벤트. starter 없이 이 조각만 필요한 모듈(:batch)용.
+spring-boot = { module = "org.springframework.boot:spring-boot" }
+# @ConditionalOnProperty 소관. TestLoginEnabledCondition 이 ":service 에 이 의존성이 없다" 며
+# 손수 Condition 을 쓴 그 라이브러리다 — :batch 는 명시적으로 들인다 (batch/build.gradle.kts 참조).
+spring-boot-autoconfigure = { module = "org.springframework.boot:spring-boot-autoconfigure" }
 
 # Logging (managed by Spring Boot BOM)
 slf4j-api = { module = "org.slf4j:slf4j-api" }

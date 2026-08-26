@@ -46,7 +46,9 @@ import com.lwg.challenge.controller.record.dto.RecordData
 import com.lwg.challenge.controller.record.dto.RecordResponse
 import com.lwg.challenge.controller.user.dto.UserInfoData
 import com.lwg.challenge.controller.user.dto.UserInfoResponse
+import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.challenge.ChallengeStatus
+import com.lwg.challenge.domain.challenge.Outcome
 import com.lwg.challenge.domain.friend.FriendshipStatus
 import com.lwg.challenge.domain.friend.Relation
 import com.lwg.challenge.domain.verification.VerificationStatus
@@ -292,35 +294,94 @@ class WireShapeContractTest {
 
     // ─── challenges ──────────────────────────────────────────────
 
+    /**
+     * 🔴 **진행 중 카드로 고정한다** — `result`/`myResult` 가 **둘 다 null 인 인스턴스**다.
+     *
+     * challenge-result 로 세 필드가 늘었는데(`status`/`result`/`myResult`) 그중 둘은 홈 카드의
+     * **다수(진행 중)에서 항상 null** 이다. 즉 이 응답에서 실제로 흐르는 값은 대부분 null 이고,
+     * `@JsonInclude(NON_NULL)` 이 켜지는 순간 **카드 대부분에서 키가 통째로 사라진다** —
+     * 모바일 실패 모드가 `JsonConvertException` → `MissingFieldException` 으로 조용히 바뀐다(#24).
+     * 값이 채워진 인스턴스로 고정하면 그 사고를 이 테스트가 못 본다.
+     */
     @Test
-    fun `ActiveChallengeResponse - 홈 카드 8필드`() {
+    fun `ActiveChallengeResponse - 홈 카드 11필드 (진행 중 = result 계열 null)`() {
+        val response = ActiveChallengeResponse(
+            ActiveChallengeListData(
+                listOf(
+                    ActiveChallengeDto(
+                        challengeId = 1L,
+                        status = ChallengeStatus.IN_PROGRESS,
+                        result = null,
+                        myResult = null,
+                        myMission = "m",
+                        opponentNickname = "n",
+                        opponentMission = "om",
+                        deadline = LocalDateTime.of(2026, 8, 7, 0, 0),
+                        myVerificationStatus = VerificationStatus.PENDING,
+                        opponentVerificationStatus = VerificationStatus.PENDING,
+                        bet = "b",
+                    ),
+                ),
+            ),
+        )
+        val data = dataOf(response)
+        assertKeys(setOf("activeChallenges"), data, "ActiveChallengeListData")
+
+        val card = data.path("activeChallenges").first()
+        assertKeys(
+            setOf(
+                "challengeId", "status", "result", "myResult",
+                "myMission", "opponentNickname", "opponentMission",
+                "deadline", "myVerificationStatus", "opponentVerificationStatus", "bet",
+            ),
+            card,
+            "ActiveChallengeDto",
+        )
+        // status 는 non-null 이다 — 카드가 결과 표시로 갈아탈 유일한 신호라 값까지 본다 (계약 §2.2).
+        assertEquals("IN_PROGRESS", card.path("status").asText())
+        assertTrue(card.path("result").isNull, "result 키가 있고 값이 null 이어야 한다")
+        assertTrue(card.path("myResult").isNull, "myResult 키가 있고 값이 null 이어야 한다")
+        // 키 부재와 값 null 은 모바일에서 서로 다른 예외라 원문까지 확인한다 (#24 선례).
+        val raw = mapper.writeValueAsString(response)
+        assertTrue(raw.contains(""""result":null"""), "원문에 result 가 null 값으로 남아야 한다. actual=$raw")
+        assertTrue(raw.contains(""""myResult":null"""), "원문에 myResult 가 null 값으로 남아야 한다. actual=$raw")
+    }
+
+    /**
+     * 판정된 카드는 `result`(역할 기준) 와 `myResult`(내 시점) 가 **함께** 나간다.
+     *
+     * 🔴 두 축이 한 객체에 공존하는 것이 이 계약의 핵심이라(§2.2) 키 존재만으로는 부족하다 —
+     * `BOTH_LOSE` 를 골라 **두 축이 각자의 이름으로 직렬화됨**을 고정한다. `myResult` 는 이제
+     * `LOSE` 로 접히지 않고 `"BOTH_LOSE"` 로 나간다(모바일 협의 확정 — `Outcome` KDoc). 값이
+     * 같아 보여도 `result` 는 역할 기준, `myResult` 는 내 시점이라 축이 다르다.
+     */
+    @Test
+    fun `ActiveChallengeResponse - 판정된 카드는 result 와 myResult 가 함께 나간다`() {
         val data = dataOf(
             ActiveChallengeResponse(
                 ActiveChallengeListData(
                     listOf(
                         ActiveChallengeDto(
-                            challengeId = 1L,
+                            challengeId = 2L,
+                            status = ChallengeStatus.COMPLETED,
+                            result = ChallengeResult.BOTH_LOSE,
+                            myResult = Outcome.BOTH_LOSE,
                             myMission = "m",
                             opponentNickname = "n",
                             opponentMission = "om",
                             deadline = LocalDateTime.of(2026, 8, 7, 0, 0),
-                            myVerificationStatus = VerificationStatus.PENDING,
-                            opponentVerificationStatus = VerificationStatus.PENDING,
+                            myVerificationStatus = VerificationStatus.FAILED,
+                            opponentVerificationStatus = VerificationStatus.FAILED,
                             bet = "b",
                         ),
                     ),
                 ),
             ),
         )
-        assertKeys(setOf("activeChallenges"), data, "ActiveChallengeListData")
-        assertKeys(
-            setOf(
-                "challengeId", "myMission", "opponentNickname", "opponentMission",
-                "deadline", "myVerificationStatus", "opponentVerificationStatus", "bet",
-            ),
-            data.path("activeChallenges").first(),
-            "ActiveChallengeDto",
-        )
+        val card = data.path("activeChallenges").first()
+        assertEquals("COMPLETED", card.path("status").asText())
+        assertEquals("BOTH_LOSE", card.path("result").asText())
+        assertEquals("BOTH_LOSE", card.path("myResult").asText())
     }
 
     @Test
@@ -386,7 +447,10 @@ class WireShapeContractTest {
     fun `ChallengeDetailResponse - 상세 + 당사자 + 계약서`() {
         val data = dataOf(ChallengeDetailResponse(detailData()))
         assertKeys(
-            setOf("challengeId", "status", "challengeDate", "deadline", "betContent", "challenger", "opponent", "contract"),
+            setOf(
+                "challengeId", "status", "result", "challengeDate", "deadline",
+                "betContent", "challenger", "opponent", "contract",
+            ),
             data,
             "ChallengeDetailData",
         )
@@ -419,12 +483,18 @@ class WireShapeContractTest {
             ),
         )
         assertKeys(
-            setOf("challengeId", "status", "challengeDate", "deadline", "betContent", "challenger", "opponent", "contract"),
+            setOf(
+                "challengeId", "status", "result", "challengeDate", "deadline",
+                "betContent", "challenger", "opponent", "contract",
+            ),
             data,
             "ChallengeDetailData (null 최대)",
         )
         assertTrue(data.path("contract").isNull, "contract 키가 있고 값이 null 이어야 한다")
         assertTrue(data.path("challenger").path("mission").isNull, "mission 키가 있고 값이 null 이어야 한다")
+        // [detailData] 는 IN_PROGRESS 라 result 가 null 이다 — 상세에서도 **대부분의 응답이
+        // null 인 필드**이므로 여기서 키 존재를 못박는다 (계약 §1: status != COMPLETED ⇒ 항상 null).
+        assertTrue(data.path("result").isNull, "result 키가 있고 값이 null 이어야 한다")
     }
 
     // ─── verification (challenge-verification) ───────────────────
@@ -498,6 +568,8 @@ class WireShapeContractTest {
     private fun detailData() = ChallengeDetailData(
         challengeId = 7L,
         status = ChallengeStatus.IN_PROGRESS,
+        // IN_PROGRESS 이므로 null 이다 — `status == COMPLETED ⟺ result != null` (계약 §1).
+        result = null,
         challengeDate = "2026-08-03",
         deadline = LocalDateTime.of(2026, 8, 4, 0, 0),
         betContent = "커피 사기",

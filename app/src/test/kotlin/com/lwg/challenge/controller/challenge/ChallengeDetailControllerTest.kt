@@ -1,6 +1,7 @@
 package com.lwg.challenge.controller.challenge
 
 import com.lwg.challenge.controller.common.exception.GlobalExceptionHandler
+import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.common.ResponseCode
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
@@ -201,6 +202,43 @@ class ChallengeDetailControllerTest {
         assertTrue(body.contains(""""betContent":"커피 사기""""), "actual=$body")
     }
 
+    // ─── 3.5 판정 결과 (challenge-result 계약 §1) ─────────────────
+
+    /**
+     * 🔴 `result` 는 **역할 기준**으로 나간다 — `CHALLENGER_WIN` 을 "내가 이겼다" 로 뒤집지 않는다.
+     *
+     * 조회자(`meId = 42`)는 challenger(1) 도 opponent(14) 도 아닌 값이지만 응답은 그대로 역할
+     * 기준이다. 상세는 계약서 화면이라 `challenger`/`opponent` 를 역할 그대로 주고 있고(§3),
+     * result 만 시점을 달리하면 **같은 응답 안에 두 기준이 섞인다.** 뒤집는 것은 홈 카드
+     * (`/challenges/active` 의 `myResult`)의 몫이다.
+     *
+     * COMPLETED 가 아닐 때 null 이라는 짝은 위쪽 케이스들이 이미 덮는다(모든 `fullView()` 가
+     * IN_PROGRESS + `result = null`) — 여기서는 원문에 키가 남는지까지 함께 본다.
+     */
+    @Test
+    fun `판정되면 result 가 역할 기준으로 나가고 그 전에는 키 존재 + null 이다`() {
+        Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong()))
+            .thenReturn(fullView().copy(status = "COMPLETED", result = ChallengeResult.CHALLENGER_WIN))
+
+        mockMvc.perform(get("/api/v1/challenges/7"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.status").value("COMPLETED"))
+            .andExpect(jsonPath("$.data.result").value("CHALLENGER_WIN"))
+
+        // 판정 전 — 키는 남고 값만 null 이다 (#24 와 같은 축).
+        Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(fullView())
+
+        val body = mockMvc.perform(get("/api/v1/challenges/7"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.status").value("IN_PROGRESS"))
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(
+            body.contains(""""result":null"""),
+            "키가 빠지면 모바일 실패 모드가 MissingFieldException 으로 바뀐다. actual=$body",
+        )
+    }
+
     // ─── 4. 에러 ─────────────────────────────────────────────────
 
     @Test
@@ -232,6 +270,8 @@ class ChallengeDetailControllerTest {
     private fun fullView() = ChallengeDetailView(
         challengeId = 7L,
         status = "IN_PROGRESS",
+        // IN_PROGRESS 라 null 이다 — 판정된 케이스는 `completedView()` 가 따로 만든다.
+        result = null,
         challengeDate = "2026-08-03",
         deadline = LocalDateTime.of(2026, 8, 4, 0, 0, 0),
         betContent = "커피 사기",

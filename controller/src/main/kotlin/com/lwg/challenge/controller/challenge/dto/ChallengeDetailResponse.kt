@@ -3,6 +3,7 @@ package com.lwg.challenge.controller.challenge.dto
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.lwg.challenge.controller.common.BaseResponse
 import com.lwg.challenge.controller.common.WIRE_DATETIME
+import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.challenge.ChallengeStatus
 import io.swagger.v3.oas.annotations.media.Schema
 import java.time.LocalDateTime
@@ -25,6 +26,18 @@ data class ChallengeDetailData(
     val challengeId: Long,
     @field:Schema(example = "IN_PROGRESS")
     val status: ChallengeStatus,
+    /**
+     * 판정 결과. **`status == COMPLETED` 가 아니면 항상 null** (도메인 불변식 — Challenge KDoc).
+     *
+     * 🔴 역할 기준이다 — `CHALLENGER_WIN` 을 "내가 이겼다" 로 뒤집는 것은 앱의 몫이다.
+     *    상세는 계약서를 보여주는 화면이라 `challenger`/`opponent` 를 역할 그대로 주고 있고
+     *    (soul-oath §3), result 만 시점을 달리하면 같은 응답 안에 두 기준이 섞인다.
+     *    홈 카드(`/challenges/active`)는 성격이 달라 `myResult` 를 따로 준다.
+     *
+     * 🔴 null 이어도 **키는 항상 나간다** (`@JsonInclude(NON_NULL)` 미설정 — #24 선례).
+     */
+    @field:Schema(example = "CHALLENGER_WIN", nullable = true)
+    val result: ChallengeResult?,
     @field:Schema(example = "2026-08-03")
     val challengeDate: String,
     @field:Schema(example = "2026-08-04 00:00:00", description = "KST 기준")

@@ -38,8 +38,13 @@ import java.time.LocalDateTime
  * - Testcontainers Postgres + Flyway → 실제 스키마.
  * - 시나리오:
  *   1. 진행 중 챌린지 없음 → 빈 배열.
- *   2. 진행 중 챌린지 2건 — challenger/opponent 매핑, COMPLETED/타인 챌린지 제외, deadline ASC, verification 매핑.
+ *   2. 진행 중 챌린지 2건 — challenger/opponent 매핑, 보관기간 지난 COMPLETED/타인 챌린지 제외,
+ *      deadline ASC, verification 매핑.
  *   3. 위조 토큰 → HTTP 200 + body.code=401.
+ *
+ * ⚠️ challenge-result 이후 **최근** 판정분은 이 목록에 한시 노출된다(계약 §2.3). 그 동작은
+ * `ActiveChallengeServiceTest` 가 `Clock.fixed` 로 결정적으로 덮으므로 여기서는 다루지 않는다 —
+ * 통합 테스트는 Docker 가 있어야만 돌아서 회귀 방지의 정본이 될 수 없다.
  *
  * Docker 미가용 환경에서는 전체 skip.
  */
@@ -142,6 +147,7 @@ class ActiveChallengeApiIntegrationTest {
         deadline: LocalDateTime,
         status: ChallengeStatus,
         result: ChallengeResult? = null,
+        completedAt: LocalDateTime? = null,
     ): ChallengeEntity {
         val now = LocalDateTime.now()
         return challengeRepository.save(
@@ -157,7 +163,9 @@ class ActiveChallengeApiIntegrationTest {
                 status = status.name,
                 result = result?.name,
                 createdAt = now,
-                completedAt = if (status == ChallengeStatus.COMPLETED) now else null,
+                // challenge-result 이후 `completed_at` 은 홈 목록의 노출 조건이 됐다 —
+                // 판정 시각을 지정할 수 있어야 "보관 기간이 지난 결과" 를 만들 수 있다.
+                completedAt = completedAt ?: if (status == ChallengeStatus.COMPLETED) now else null,
             ),
         )
     }
@@ -203,7 +211,7 @@ class ActiveChallengeApiIntegrationTest {
     }
 
     @Test
-    fun `challenger 와 opponent 매핑, COMPLETED 제외, deadline ASC, verification 매핑`() {
+    fun `challenger 와 opponent 매핑, 보관기간 지난 COMPLETED 제외, deadline ASC, verification 매핑`() {
         val me = newUser(kakaoId = 9000010L, nickname = "나")
         val minsoo = newUser(kakaoId = 9000011L, nickname = "민수")
         val jiyeon = newUser(kakaoId = 9000012L, nickname = "지연")
@@ -233,7 +241,9 @@ class ActiveChallengeApiIntegrationTest {
             status = ChallengeStatus.IN_PROGRESS,
         )
 
-        // 제외: 내가 참여한 COMPLETED
+        // 제외: 내가 참여한 COMPLETED — 단 **보관 기간이 지난** 것이다.
+        // challenge-result 이후 최근 판정분은 목록에 한시 노출되므로(계약 §2.3), 여기서 노리는
+        // "결과 카드가 아닌 것" 을 만들려면 completed_at 이 창 밖(1년 전)이어야 한다.
         newChallenge(
             challengerId = me.id!!,
             opponentId = minsoo.id!!,
@@ -243,6 +253,7 @@ class ActiveChallengeApiIntegrationTest {
             deadline = LocalDateTime.of(2026, 4, 1, 0, 0, 0),
             status = ChallengeStatus.COMPLETED,
             result = ChallengeResult.CHALLENGER_WIN,
+            completedAt = LocalDateTime.now().minusDays(365),
         )
 
         // 제외: 타인끼리 IN_PROGRESS

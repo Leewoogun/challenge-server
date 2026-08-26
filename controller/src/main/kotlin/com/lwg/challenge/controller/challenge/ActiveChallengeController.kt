@@ -29,8 +29,10 @@ class ActiveChallengeController(
 
     @GetMapping("/challenges/active")
     @Operation(
-        summary = "진행 중 챌린지 조회",
-        description = "현재 사용자가 challenger 또는 opponent 인 IN_PROGRESS 챌린지를 deadline ASC 로 반환.",
+        summary = "홈 목록 조회 (진행 중 + 최근 판정)",
+        description = "현재 사용자가 challenger 또는 opponent 인 IN_PROGRESS 챌린지를 deadline ASC 로 반환하고, " +
+            "그 **뒤에** 최근 판정된 COMPLETED 챌린지를 completed_at DESC 로 이어 붙인다 " +
+            "(보관 기간은 `challenge.result.completed-retention-days`). 카드 구분은 `status` 로 한다.",
     )
     @SecurityRequirement(name = "bearerAuth")
     fun getActiveChallenges(): ActiveChallengeResponse {
@@ -56,6 +58,10 @@ class ActiveChallengeController(
 
     private fun ActiveChallengeView.toDto(): ActiveChallengeDto = ActiveChallengeDto(
         challengeId = challengeId,
+        status = status,
+        // result 는 역할 기준 원본, myResult 는 내 시점 — 뒤집기는 서비스가 이미 끝냈다 (계약 §2.2).
+        result = result,
+        myResult = myResult,
         myMission = myMission,
         opponentNickname = opponentNickname,
         opponentMission = opponentMission,

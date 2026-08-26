@@ -471,6 +471,13 @@ private class FakeChallengeRepository : ChallengeRepository {
 
     override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> = emptyList()
 
+    /** 홈 목록 전용 — 이 테스트가 다루는 경로가 아니다 (`ActiveChallengeServiceTest` 소관). */
+    override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> = emptyList()
+
+    /** 판정 배치 전용 — 이 테스트가 다루는 경로가 아니다 (`ChallengeJudgementRunnerTest` 소관). */
+    override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> =
+        emptyList()
+
     override fun findConflicting(
         userA: Long,
         userB: Long,

@@ -904,7 +904,19 @@ private class FakeChallengeRepository : ChallengeRepository {
             .filter { (it.challengerId == userId || it.opponentId == userId) && it.status in statuses }
             .sortedBy { it.deadline }
 
+    /** 홈 목록 전용 — 이 테스트가 다루는 경로가 아니다 (`ActiveChallengeServiceTest` 소관). */
+    override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> = emptyList()
+
     override fun findById(id: Long): Challenge? = store[id]
+
+    /**
+     * 판정 배치 대상 선정 — 경계는 `<=` 다 (`findReceivedPending` 의 `>` 와 상보적).
+     * 이 테스트가 다루는 경로는 아니지만, 두 조건이 갈리면 실제 구현과 fake 가 어긋난다.
+     */
+    override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> =
+        store.values
+            .filter { it.status in statuses && it.deadline <= now }
+            .sortedBy { it.deadline }
 
     override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> =
         store.values

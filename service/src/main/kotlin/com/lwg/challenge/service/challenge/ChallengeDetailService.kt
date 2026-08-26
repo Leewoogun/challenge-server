@@ -2,6 +2,7 @@ package com.lwg.challenge.service.challenge
 
 import com.lwg.challenge.domain.challenge.Challenge
 import com.lwg.challenge.domain.challenge.ChallengeRepository
+import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.contract.Contract
@@ -46,6 +47,9 @@ class ChallengeDetailService(
         return ChallengeDetailView(
             challengeId = challengeId,
             status = challenge.status.name,
+            // 도메인 값을 그대로 흘린다. COMPLETED 가 아니면 null 이라는 불변식은 판정 배치가
+            // 세우는 것이고(Challenge KDoc), 여기서 다시 검사하면 규칙이 두 곳에 살게 된다.
+            result = challenge.result,
             challengeDate = challenge.challengeDate.toString(),
             deadline = challenge.deadline,
             betContent = challenge.betContent,
@@ -85,6 +89,13 @@ class ChallengeDetailService(
 data class ChallengeDetailView(
     val challengeId: Long,
     val status: String,
+    /**
+     * 판정 결과. `status == COMPLETED` 가 아니면 항상 null (challenge-result 계약 §1).
+     *
+     * 🔴 **역할 기준**이다 — 뒤집지 않는다. 이 화면이 `challenger`/`opponent` 를 역할 그대로
+     * 주고 있어서(위 KDoc), result 만 "내 시점" 으로 바꾸면 **같은 응답 안에 두 기준이 섞인다.**
+     */
+    val result: ChallengeResult?,
     val challengeDate: String,
     val deadline: LocalDateTime,
     val betContent: String,

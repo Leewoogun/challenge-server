@@ -86,6 +86,27 @@ challenge:
     # challenge/ 아래의 형제 폴더다.
     storage-root: ${CHALLENGE_PHOTO_ROOT:../challenge-image}
 
+  # 결과 판정 배치 (challenge-result T-B1). 계약 §3.2.
+  result:
+    batch:
+      # 🔴 자정 "직후" 의 구체값. deadline 은 익일 00:00 이므로 00:05 면 5분 여유다.
+      #    zone 은 코드에서 Asia/Seoul 로 명시한다(ChallengeJudgementScheduler.KST_ZONE) —
+      #    이 값에 타임존이 없는 이유이자, 여기만 고쳐서는 타임존을 못 바꾸는 이유다.
+      cron: ${CHALLENGE_JUDGEMENT_CRON:0 5 0 * * *}
+      # 운영 스위치. 다중 인스턴스로 늘릴 때 한 대만 배치를 돌리기 위한 자리다(ADR-0007 소관).
+      # 미설정이면 켜짐(matchIfMissing = true) — 배치가 안 도는 것이 도는 것보다 나쁘다.
+      enabled: ${CHALLENGE_JUDGEMENT_ENABLED:true}
+
+    # 판정된 챌린지를 홈 목록(`/challenges/active`)에 남겨 두는 기간 (계약 §2.3).
+    #
+    # 🔴 이게 0 이면 결과를 볼 경로가 사라진다. 판정 즉시 홈에서 사라지는데 이 feature 는
+    #    푸시가 범위 밖이고(사용자 결정) 지난 챌린지 목록 화면도 없다 —
+    #    이 목록이 판정 결과에 도달하는 **유일한 경로**다.
+    # 🔴 7일도 정식 해법이 아니라 시간벌기다. 정식 해법은 지난 챌린지 화면 + 조회 API(백로그).
+    #    서버는 row 를 지우지 않으므로 GET /challenges/{id} 는 기한 없이 열린다 —
+    #    기한이 붙는 것은 **목록**뿐이다.
+    completed-retention-days: ${CHALLENGE_COMPLETED_RETENTION_DAYS:7}
+
 springdoc:
   api-docs:
     path: /v3/api-docs
