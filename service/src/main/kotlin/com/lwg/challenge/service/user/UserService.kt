@@ -3,6 +3,7 @@ package com.lwg.challenge.service.user
 import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.domain.user.User
 import com.lwg.challenge.domain.user.UserRepository
+import com.lwg.challenge.domain.user.UserStatus
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -20,11 +21,24 @@ class UserService(
     private val log = LoggerFactory.getLogger(UserService::class.java)
 
     /**
-     * 본인 정보 조회. 토큰의 userId 가 DB 에 없으면(회원탈퇴/삭제) 401.
+     * 본인 정보 조회. 토큰의 userId 가 DB 에 없거나 **탈퇴한 계정**이면 401.
+     *
+     * 🔴 **`DELETED` 를 부재와 똑같이 취급하는 것이 이 메서드의 계약이다.** 원래 이 KDoc 은
+     * *"DB 에 없으면(회원탈퇴/삭제) 401"* 이라고 적혀 있었다 — 탈퇴가 row 를 지운다는 전제였다.
+     * mypage T-B2 가 그 전제를 바꿔 **탈퇴해도 row 가 남으므로**(상대의 챌린지가 FK 로 가리킨다)
+     * status 검사를 더해야 예전과 같은 답이 나온다. 없으면 탈퇴자가 `nickname="탈퇴한 사용자"`,
+     * `kakaoId=null` 인 자기 정보를 200 으로 돌려받는다.
+     *
+     * ⚠️ 이 검사는 **이 엔드포인트에만** 있다. `JwtAuthenticationFilter` 에 status 검사를 넣는
+     * 것은 전 엔드포인트에 영향을 주는 별도 협의 사항이라 범위 밖이다 — 탈퇴 직후 최대 1시간
+     * (access token 수명) 동안 다른 엔드포인트는 여전히 열려 있다.
      */
     @Transactional(readOnly = true)
-    fun getMe(me: Long): User =
-        userRepository.findById(me) ?: throw UnauthorizedException("user not found")
+    fun getMe(me: Long): User {
+        val user = userRepository.findById(me) ?: throw UnauthorizedException("user not found")
+        if (user.status == UserStatus.DELETED) throw UnauthorizedException("user withdrawn")
+        return user
+    }
 
     /**
      * FCM 토큰 등록·갱신 (push-fcm 계약 §1).

@@ -44,4 +44,7 @@ class UserRepositoryImpl(
 
     override fun updateFcmToken(userId: Long, fcmToken: String?): Int =
         jpa.updateFcmToken(userId, fcmToken)
+
+    override fun anonymizeForWithdrawal(userId: Long, anonymizedNickname: String, now: LocalDateTime): Int =
+        jpa.anonymizeForWithdrawal(userId, anonymizedNickname, now)
 }

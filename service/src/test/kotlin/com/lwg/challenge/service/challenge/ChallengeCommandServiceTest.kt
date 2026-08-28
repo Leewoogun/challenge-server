@@ -907,6 +907,15 @@ private class FakeChallengeRepository : ChallengeRepository {
     /** 홈 목록 전용 — 이 테스트가 다루는 경로가 아니다 (`ActiveChallengeServiceTest` 소관). */
     override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> = emptyList()
 
+    /** 보관함 전용 — 이 테스트가 다루는 경로가 아니다 (`ChallengeHistoryServiceTest` 소관). */
+    override fun findCompletedHistoryByUserInMonth(
+        userId: Long,
+        monthStart: LocalDate,
+        nextMonthStart: LocalDate,
+    ): List<Challenge> = emptyList()
+
+    override fun findEarliestCompletedChallengeDate(userId: Long): LocalDate? = null
+
     override fun findById(id: Long): Challenge? = store[id]
 
     /**
@@ -963,6 +972,9 @@ private class FakeChallengeRepository : ChallengeRepository {
     override fun deleteById(id: Long) {
         store.remove(id)
     }
+
+    /** 탈퇴 전용 — 이 테스트가 다루는 경로가 아니다 (`WithdrawalServiceTest` 소관). */
+    override fun deletePendingSentBy(userId: Long): Int = 0
 }
 
 private class FakeFriendshipRepository : FriendshipRepository {
@@ -988,6 +1000,12 @@ private class FakeFriendshipRepository : FriendshipRepository {
     override fun deleteById(id: Long) {
         store.removeAll { it.id == id }
     }
+
+    override fun deleteAllByUserId(userId: Long): Int {
+        val before = store.size
+        store.removeAll { it.requesterId == userId || it.receiverId == userId }
+        return before - store.size
+    }
 }
 
 private class FakeUserRepository : UserRepository {
@@ -1008,6 +1026,8 @@ private class FakeUserRepository : UserRepository {
     // FCM 토큰은 이 서비스의 관심사가 아니다. 동작 검증은 UserServiceFcmTokenTest / AuthServiceLogoutTest 가 한다.
     override fun clearFcmTokenOwnedByOthers(fcmToken: String, exceptUserId: Long): Int = 0
     override fun updateFcmToken(userId: Long, fcmToken: String?): Int = 1
+    override fun anonymizeForWithdrawal(userId: Long, anonymizedNickname: String, now: LocalDateTime): Int =
+        error("챌린지 서비스가 익명화를 시도했다")
 }
 
 /**
@@ -1048,6 +1068,18 @@ private class FakeVerificationRepository : VerificationRepository {
 
     override fun saveAllAndFlush(verifications: Collection<Verification>): List<Verification> =
         verifications.map { save(it) }
+
+    override fun findAllByUserId(userId: Long): List<Verification> =
+        store.filter { it.userId == userId }
+
+    override fun clearPhotoKeysByUserId(userId: Long): Int {
+        val targets = store.filter { it.userId == userId && it.photoUrl != null }
+        targets.forEach { target ->
+            store.removeAll { it.id == target.id }
+            store.add(target.copy(photoUrl = null))
+        }
+        return targets.size
+    }
 }
 
 

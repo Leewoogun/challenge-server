@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lwg.challenge.controller.common.exception.GlobalExceptionHandler
 import com.lwg.challenge.controller.user.dto.FcmTokenRequest
 import com.lwg.challenge.domain.common.ResponseCode
+import com.lwg.challenge.domain.common.exception.DialogException
 import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.domain.user.User
 import com.lwg.challenge.domain.user.UserStatus
 import com.lwg.challenge.service.user.UserService
+import com.lwg.challenge.service.user.WithdrawalService
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -22,6 +24,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
@@ -48,6 +51,9 @@ class UserControllerTest {
 
     @MockitoBean
     lateinit var userService: UserService
+
+    @MockitoBean
+    lateinit var withdrawalService: WithdrawalService
 
     private val meId = 42L
 
@@ -186,6 +192,65 @@ class UserControllerTest {
             .andExpect(status().isUnauthorized)
             .andExpect(jsonPath("$.error").value(true))
             .andExpect(jsonPath("$.code").value(ResponseCode.UNAUTHORIZED))
+    }
+
+    // ─── DELETE /me (mypage T-B2 — 회원탈퇴) ─────────────────────────────
+
+    /**
+     * 응답에 `data` 가 **없다.** `logout` / `fcm-token` 등록과 같은 shape 이다.
+     *
+     * 🔴 응답 **원문**으로 확인한다 — `jsonPath("$.data").doesNotExist()` 는 `{"data":null}` 에서도
+     * 통과해 버린다. 고정하려는 건 "키가 null" 이 아니라 "키가 아예 없다" 이고, 모바일에서 그 둘은
+     * 서로 다른 예외가 된다 (위 `updateFcmToken` 테스트와 같은 이유).
+     */
+    @Test
+    fun `withdraw - 정상 탈퇴면 data 없는 BaseResponse 200`() {
+        val body = mockMvc.perform(delete("/api/v1/users/me"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.error").value(false))
+            .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
+            .andReturn().response.contentAsString
+
+        assertFalse(body.contains("\"data\""), "data 키가 없어야 한다. 실제 응답=$body")
+
+        Mockito.verify(withdrawalService).withdraw(meId)
+    }
+
+    /**
+     * 🔴 **인증 없이 탈퇴가 실행되면 안 된다.** 슬라이스 테스트라 `addFilters = false` 로
+     * SecurityFilterChain 을 우회하므로, 컨트롤러 자신의 `currentUserId()` 가 마지막 방어선이다.
+     * 실서비스에서는 그 앞에 `.anyRequest().authenticated()` 가 한 겹 더 있다.
+     */
+    @Test
+    fun `withdraw - principal 이 없으면 HTTP 401 + code 401`() {
+        SecurityContextHolder.clearContext()
+
+        mockMvc.perform(delete("/api/v1/users/me"))
+            .andExpect(status().isUnauthorized)
+            .andExpect(jsonPath("$.error").value(true))
+            .andExpect(jsonPath("$.code").value(ResponseCode.UNAUTHORIZED))
+
+        Mockito.verifyNoInteractions(withdrawalService)
+    }
+
+    /**
+     * 🔴 **탈퇴는 로그아웃과 달리 "언제나 성공" 이어서는 안 된다.** 카카오 연결 해제가 이행되지
+     * 않았는데 성공이라고 답하면 사용자는 탈퇴가 끝났다고 믿는데 우리 앱은 여전히 그의 카카오
+     * 계정에 연결돼 있다.
+     *
+     * ⚠️ 실패인데 **HTTP status 는 200** 이다 (700번대 비즈니스 코드 규약). 앱은 `code` 를 보고
+     * 갈라야 하며 status 만 봐서는 실패를 감지할 수 없다.
+     */
+    @Test
+    fun `withdraw - 카카오 연결 해제 실패면 HTTP 200 + code 701`() {
+        Mockito.doThrow(DialogException("일시적인 문제로 탈퇴하지 못했어요. 잠시 후 다시 시도해주세요"))
+            .`when`(withdrawalService).withdraw(meId)
+
+        mockMvc.perform(delete("/api/v1/users/me"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.error").value(true))
+            .andExpect(jsonPath("$.code").value(ResponseCode.DIALOG_ERROR))
+            .andExpect(jsonPath("$.message").value("일시적인 문제로 탈퇴하지 못했어요. 잠시 후 다시 시도해주세요"))
     }
 
     private companion object {

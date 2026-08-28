@@ -76,4 +76,31 @@ data class PartyVerificationDto(
     @field:Schema(nullable = true, example = "2026-08-14 15:32:10", description = "KST 기준")
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
     val verifiedAt: LocalDateTime?,
+
+    /**
+     * 사진이 **탈퇴로 삭제됐는가.** non-null 이며 기본값은 `false` — 정상 사용자의 카드에서는
+     * 항상 `false` 다. 기존 필드의 의미는 하나도 바뀌지 않는다 (**순수 추가**).
+     *
+     * 판정식은 `status == VERIFIED && 사진 key 없음 && 그 party 의 계정이 DELETED` 다
+     * (`VerificationService.view` KDoc 에 세 갈래 표가 있다).
+     *
+     * ## 🔴 왜 필요한가 — `photoUrl == null` 이 이미 다른 뜻으로 쓰이고 있다
+     *
+     * 앱은 `photoUrl == null` 을 `"사진을 불러오지 못했어요"` 로 그린다. 그 자리는
+     * *"인증은 됐는데 URL 이 없는 비정상"* 이라는 뜻이다. 탈퇴자의 삭제된 사진이 그 문구를
+     * 빌려 쓰면 (1) **영구 상태를 일시적 실패의 어휘로** 말하게 되고, (2) 더 나쁘게는
+     * **진짜 데이터 이상이 탈퇴자 뒤에 숨는다.** 그래서 신호를 하나 더 준다.
+     *
+     * ## 🔴 `isWithdrawn` 이 아닌 것이 의도다
+     *
+     * 앱이 *"왜"* 가 아니라 *"뭘 그릴지"* 만 받게 한다. design 이 보관함 카드에서 `isWithdrawn`
+     * 플래그를 **명시적으로 거부**했다 — 받으면 특별 표시를 넣게 되고, 증거 보존 화면에서
+     * 그건 *"이 기록은 무효"* 로 읽힌다. `photoDeleted` 는 **사진 자리 하나만 바꾸고 다른 데
+     * 쓸 수 없다.**
+     */
+    @field:Schema(
+        example = "false",
+        description = "true = 탈퇴로 사진이 삭제됨(영구). false 인데 photoUrl 도 null 이면 그건 로드 실패/미인증이다",
+    )
+    val photoDeleted: Boolean,
 )

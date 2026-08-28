@@ -7,6 +7,8 @@ import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.notification.NotificationType
 import com.lwg.challenge.domain.photo.PhotoStorage
+import com.lwg.challenge.domain.user.UserRepository
+import com.lwg.challenge.domain.user.UserStatus
 import com.lwg.challenge.domain.verification.Verification
 import com.lwg.challenge.domain.verification.VerificationRepository
 import com.lwg.challenge.domain.verification.VerificationStatus
@@ -55,6 +57,11 @@ import java.time.LocalDateTime
 class VerificationService(
     private val challengeRepository: ChallengeRepository,
     private val verificationRepository: VerificationRepository,
+    /**
+     * [getVerifications] 가 양측의 `status` 를 봐야 하기 때문에 있다 — `photoDeleted` 판정에만
+     * 쓰인다. 제출·사진 읽기 경로는 이 저장소를 건드리지 않는다.
+     */
+    private val userRepository: UserRepository,
     private val photoStorage: PhotoStorage,
     private val clock: Clock,
     /** 알림은 커밋 후에 나간다 — `NotificationDispatcher` 가 `AFTER_COMMIT` 으로 받는다. */
@@ -156,17 +163,38 @@ class VerificationService(
      * `IN_PROGRESS` 를 요구하지 않는다. 챌린지가 끝난 뒤에도 *"그때 뭘 올렸는지"* 는 보여야 한다.
      * row 가 없으면(수락 전) 양쪽 다 `PENDING` 으로 나간다 — `Verification` KDoc 의
      * *"row 자체가 없으면 PENDING 으로 간주"* 와 같은 규칙이다.
+     *
+     * ## 🔴 쿼리가 2개에서 3개로 늘었다 — `photoDeleted` 때문이다 (mypage T-B1 부록)
+     *
+     * 양측 `users` 를 한 번에 조회한다. [PartyVerificationView.photoDeleted] 를 판정하려면
+     * 그 party 가 탈퇴했는지를 알아야 하는데, 그 정보는 `verifications` 에 없다.
+     * **새로운 패턴은 아니다** — `ChallengeDetailService.getDetail` 이 이미 같은 자리에서
+     * `findAllByIds(setOf(challengerId, opponentId))` 를 하고 있다. 두 응답이 상세 화면에서
+     * 합쳐지므로 조회 모양이 같은 편이 낫다.
      */
     @Transactional(readOnly = true)
     fun getVerifications(me: Long, challengeId: Long): VerificationsView {
         val challenge = loadAsParticipant(challengeId, me)
         val byUser = verificationRepository.findAllByChallengeIds(listOf(challengeId))
             .associateBy { it.userId }
+        val users = userRepository.findAllByIds(setOf(challenge.challengerId, challenge.opponentId))
 
         return VerificationsView(
             challengeId = challengeId,
-            challenger = view(challengeId, VerificationParty.CHALLENGER, challenge.challengerId, byUser[challenge.challengerId]),
-            opponent = view(challengeId, VerificationParty.OPPONENT, challenge.opponentId, byUser[challenge.opponentId]),
+            challenger = view(
+                challengeId = challengeId,
+                party = VerificationParty.CHALLENGER,
+                userId = challenge.challengerId,
+                verification = byUser[challenge.challengerId],
+                ownerStatus = users[challenge.challengerId]?.status,
+            ),
+            opponent = view(
+                challengeId = challengeId,
+                party = VerificationParty.OPPONENT,
+                userId = challenge.opponentId,
+                verification = byUser[challenge.opponentId],
+                ownerStatus = users[challenge.opponentId]?.status,
+            ),
         )
     }
 
@@ -189,6 +217,10 @@ class VerificationService(
      * 해당 party 가 `VERIFIED` 가 아니거나 key·파일이 없음 → [PhotoReadResult.NotFound].
      * 권한을 상태보다 먼저 본다 — 제3자에게 인증 여부를 흘리지 않는다 ([loadInProgressAsParticipant]
      * 와 같은 이유).
+     *
+     * ⚠️ **탈퇴한 사용자의 사진은 코드 변경 없이 이미 404 다** (mypage T-B2). 탈퇴는 row 를
+     * 남긴 채 `photo_url` 만 NULL 로 미는데, 아래 `verification.photoUrl ?: return NotFound`
+     * 가 그걸 그대로 받아낸다.
      *
      * `IN_PROGRESS` 를 요구하지 않는다 — 조회([getVerifications])와 같은 이유로, 끝난 챌린지의
      * 사진도 보여야 한다.
@@ -217,26 +249,47 @@ class VerificationService(
 
     // ─── 내부 helper ─────────────────────────────────────────────
 
+    /**
+     * 한 party 의 응답 조각. **사진 자리는 세 갈래**이며 그 구분이 이 함수의 전부다.
+     *
+     * | 조합 | `photoUrl` | `photoDeleted` | 앱이 그리는 것 |
+     * |---|---|---|---|
+     * | `VERIFIED` + key 있음 | 경로 | `false` | 사진 |
+     * | `VERIFIED` + key 없음 + owner `DELETED` | `null` | **`true`** | *"탈퇴로 삭제된 사진"* |
+     * | 그 외 (`PENDING`/`FAILED`, 또는 `VERIFIED` + key 없음인데 owner 가 살아 있음) | `null` | `false` | 사진 없음 / 로드 실패 |
+     *
+     * 🔴 **세 번째 줄의 마지막 경우가 이 필드를 만든 이유다.** 그건 *"인증은 됐는데 URL 이
+     * 없는 비정상"* 이고 앱이 `"사진을 불러오지 못했어요"` 로 그린다. 탈퇴자의 삭제된 사진이
+     * 그 문구를 빌려 쓰면 (1) **영구 상태를 일시적 실패의 어휘로** 말하게 되고, (2) 더 나쁘게는
+     * **진짜 데이터 이상이 탈퇴자 뒤에 숨는다.** owner 의 `status` 까지 봐야 둘이 갈린다.
+     *
+     * ⚠️ owner row 자체가 없으면([ownerStatus] 가 null) `photoDeleted` 는 `false` 다 —
+     * 탈퇴는 row 를 지우지 않으므로(mypage T-B2) row 부재는 탈퇴가 아니라 데이터 이상이고,
+     * 그건 위 표의 세 번째 줄에 속하는 것이 맞다.
+     *
+     * @param ownerStatus 이 party 사용자의 계정 상태. row 가 없으면 null.
+     */
     private fun view(
         challengeId: Long,
         party: VerificationParty,
         userId: Long,
         verification: Verification?,
+        ownerStatus: UserStatus?,
     ): PartyVerificationView {
         val status = verification?.status ?: VerificationStatus.PENDING
         val key = verification?.photoUrl
-        // VERIFIED 인데 key 가 없는 조합은 서버가 만들지 않는다. 그래도 key 유무로 판단해야
-        // 만에 하나 그런 row 가 있어도 열리지 않는 경로를 내려보내지 않는다.
-        val photoUrl = if (status == VerificationStatus.VERIFIED && key != null) {
-            photoPath(challengeId, party)
-        } else {
-            null
-        }
+        // 판단 기준은 status 가 아니라 **key 유무**다 — 탈퇴는 row(status/verified_at)를 보존한
+        // 채 사진 파일과 key 만 지우기 때문이다 (mypage T-B2). 원래부터 key 로 보고 있던 덕분에
+        // 이 줄은 그 feature 가 들어올 때도 고칠 것이 없었다.
+        val hasPhoto = status == VerificationStatus.VERIFIED && key != null
         return PartyVerificationView(
             userId = userId,
             status = status,
-            photoUrl = photoUrl,
+            photoUrl = if (hasPhoto) photoPath(challengeId, party) else null,
             verifiedAt = verification?.verifiedAt,
+            photoDeleted = status == VerificationStatus.VERIFIED &&
+                key == null &&
+                ownerStatus == UserStatus.DELETED,
         )
     }
 
@@ -341,11 +394,19 @@ data class VerificationsView(
 /**
  * 한 사람의 인증 상태.
  *
- * @param photoUrl **만료 없는 고정 상대 경로.** `VERIFIED` 가 아니면 null.
+ * @param photoUrl **만료 없는 고정 상대 경로.** `VERIFIED` 가 아니거나 key 가 없으면 null.
+ * @param photoDeleted 사진이 **탈퇴로 삭제됐는가.** 판정식과 세 갈래 표는
+ *   [VerificationService.view] KDoc 참조.
+ *
+ *   🔴 **`isWithdrawn` 이 아니라 `photoDeleted` 인 것이 의도다.** 앱이 *"왜"* 가 아니라
+ *   *"뭘 그릴지"* 만 받게 한다. design 이 보관함 카드에서 `isWithdrawn` 플래그를 **명시적으로
+ *   거부**했다 — 받으면 앱이 특별 표시를 넣게 되고, 증거 보존 화면에서 그건 *"이 기록은 무효"*
+ *   로 읽힌다. `photoDeleted` 는 **사진 자리 하나만 바꾸고 다른 데 쓸 수 없다.**
  */
 data class PartyVerificationView(
     val userId: Long,
     val status: VerificationStatus,
     val photoUrl: String?,
     val verifiedAt: LocalDateTime?,
+    val photoDeleted: Boolean,
 )

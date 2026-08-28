@@ -24,4 +24,10 @@ class VerificationRepositoryImpl(
         return jpa.saveAllAndFlush(verifications.map { VerificationEntity.fromDomain(it) })
             .map { it.toDomain() }
     }
+
+    override fun findAllByUserId(userId: Long): List<Verification> =
+        jpa.findAllByUserId(userId).map { it.toDomain() }
+
+    override fun clearPhotoKeysByUserId(userId: Long): Int =
+        jpa.clearPhotoKeysByUserId(userId)
 }

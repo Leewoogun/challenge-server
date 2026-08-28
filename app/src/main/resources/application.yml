@@ -58,6 +58,16 @@ kakao:
     connect-timeout-ms: 2000
     read-timeout-ms: 5000
 
+  # 회원탈퇴 시 카카오 연결 해제(unlink)용 **서비스 앱 어드민 키** (mypage T-B2).
+  #
+  # 🔴 사용자 access token 이 아니라 admin key 를 쓰는 이유: 서버는 카카오 access token 을
+  #    저장하지 않는다(로그인 때 /v2/user/me 한 번 쓰고 버린다). 토큰 방식이면 앱이 탈퇴
+  #    시점에 카카오 토큰을 새로 받아 보내야 하고, 기기의 카카오 세션이 만료돼 있으면
+  #    **탈퇴 자체가 불가능**해진다. admin key 는 users.kakao_id 만으로 동작한다.
+  # 🔴 미설정이면 NoOpKakaoUnlinkAdapter 로 떨어져 DB 익명화만 수행한다(WARN 로그).
+  #    **운영 배포 전 필수 설정 항목이다.**
+  admin-key: ${KAKAO_ADMIN_KEY:}
+
 # 애플리케이션 고유 설정 (`challenge.*`). dev.test-login.enabled 도 이 네임스페이스다.
 challenge:
   fcm:

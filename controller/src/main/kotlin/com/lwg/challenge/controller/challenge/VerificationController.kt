@@ -166,6 +166,9 @@ class VerificationController(
         status = status,
         photoUrl = photoUrl,
         verifiedAt = verifiedAt,
+        // 탈퇴로 사진이 지워졌는지는 서비스가 이미 판정했다 — 앱은 "왜" 가 아니라
+        // "뭘 그릴지" 만 받는다 (`PartyVerificationDto.photoDeleted` KDoc).
+        photoDeleted = photoDeleted,
     )
 
     /** `ChallengeCommandController` 와 같은 규칙. principal 은 userId(Long). */

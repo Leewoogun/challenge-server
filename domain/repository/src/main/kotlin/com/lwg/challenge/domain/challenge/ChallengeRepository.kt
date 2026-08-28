@@ -42,6 +42,64 @@ interface ChallengeRepository {
      */
     fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge>
 
+    /**
+     * 계약서 보관함 — `(challenger = :u OR opponent = :u) AND status = COMPLETED` 중
+     * **`challengeDate` 가 `[monthStart, nextMonthStart)` 에 드는 것**을
+     * `challenge_date DESC, id DESC` 로 반환 (mypage T-B1, 2026-08-28 월 단위 개정).
+     *
+     * ## 🔴 [findRecentlyCompletedByUser] 와 축이 다르다 — 그게 이 메서드가 따로 있는 이유다
+     *
+     * 그쪽은 `completed_at` 이고 이쪽은 **`challenge_date`** 다. 판정이 자정 직후 배치라
+     * 7월 31일 챌린지의 `completed_at` 은 8월 1일 00:05 다 — `completed_at` 으로 범위를 자르면
+     * **7월 마지막 날 챌린지가 8월 응답에 들어가서**, 카드에 적힌 날짜(7/31)와 화면 상단의 월
+     * 표시(8월)가 한 화면에서 서로 다른 말을 한다. 반대로 홈 목록은 *"판정이 방금 났다"* 를
+     * 보여주는 것이 목적이라 `completed_at` 이 맞다. **같은 row 라도 화면의 목적이 다르면
+     * 조회 축이 다르다.**
+     *
+     * ## 🔴 `EXPIRED` 는 대상이 아니다
+     *
+     * 만료는 **성립조차 못 한 신청**이라 계약서·서명·사진·결과가 전부 없다 — 보관함에 올리면
+     * 증거가 0인 카드가 된다. 조건이 `status = COMPLETED` 라 애초에 걸리지 않는다.
+     *
+     * ## 페이지네이션 — **필요가 사라졌다** (2026-08-28 월 단위 개정)
+     *
+     * 1차(전체 반환)에서는 이 목록이 *"프로젝트 최초의 무한히 자라는 목록"* 이라 페이지네이션
+     * 도입 1순위였다. 월 단위가 되면서 **한 응답의 상한이 한 달치로 고정**됐다 — 같은 상대와는
+     * 하루 한 판이 상한이고([findConflicting] 이 `challenge_date` 로 막는다), 한 달에 담기는
+     * 카드 수는 사실상 유계다. 다른 엔드포인트의 페이지네이션 논의는 그대로 남지만
+     * **보관함은 그 목록에서 빠진다.**
+     *
+     * @param monthStart 조회 월의 1일 (포함)
+     * @param nextMonthStart 다음 달 1일 (**미포함**). 반개구간인 이유는 구현체 KDoc 참조
+     */
+    fun findCompletedHistoryByUserInMonth(
+        userId: Long,
+        monthStart: LocalDate,
+        nextMonthStart: LocalDate,
+    ): List<Challenge>
+
+    /**
+     * 이 사용자의 가장 오래된 `COMPLETED` 챌린지의 `challengeDate`. 종료 기록이 없으면 null.
+     *
+     * ## 🔴 보관함의 **과거 하한**이다 — 앱의 `<` 비활성 판정에 쓴다
+     *
+     * 하한의 목적은 *"확정적으로 빈 달의 사막으로 걸어 들어가지 않게 한다"* 이다. 이 날짜의
+     * 월보다 이전은 **0건인 것이 보장**된다. 하한을 두지 않으면 화살표가 영원히 살아 있어
+     * 사용자가 *"더 뒤에 있나"* 를 확인할 방법이 없고, 보관함은 *"이게 네 기록 전부다"* 라고
+     * 주장하는 화면이라 **화면이 그 주장을 못 하게 된다.**
+     *
+     * ## 🔴 이 값은 시간이 지나도 **과거로 밀리지 않는다**
+     *
+     * `challengeDate` 는 생성 시점의 오늘 또는 내일이고(`KstDeadlineCalculator`), `COMPLETED` 는
+     * 마감이 지나야 되는 상태다. 그래서 새로 쌓이는 기록은 항상 기존 최소값보다 뒤다 —
+     * **하한이 한 번 정해지면 내려가지 않는다.** 죽었던 화살표가 나중에 되살아나는 일이 없다.
+     *
+     * 0건이면 null 이고, 그때 호출부는 하한을 **이번 달**로 삼는다(= 상한과 같아져 양쪽 화살표가
+     * 모두 죽는다). 아무 데도 기록이 없는데 뒤로 걷게 두면 *"더 찾아보면 있을지도"* 라는 거짓
+     * 기대를 만든다.
+     */
+    fun findEarliestCompletedChallengeDate(userId: Long): LocalDate?
+
     /** id 로 단건 조회. 없으면 null. (수락/거절/취소의 권한·상태 검증 진입점) */
     fun findById(id: Long): Challenge?
 
@@ -117,4 +175,30 @@ interface ChallengeRepository {
 
     /** row 물리 삭제 — 챌린저의 PENDING 취소에서만 사용. `CANCELED` 상태를 도입하지 않기 위한 선택. */
     fun deleteById(id: Long)
+
+    /**
+     * [userId] 가 **challenger 인 `PENDING`** 챌린지를 전부 물리 삭제. **회원탈퇴 전용** (mypage T-B4).
+     *
+     * ## 🔴 왜 보낸 것만 지우고 받은 것은 두는가 — 정책의 절반이 반대 방향이다
+     *
+     * **보낸 것(challenger)**: 남겨 두면 상대가 그 도전장을 **수락할 수 있다.** 그런데 탈퇴자는
+     * 로그인이 불가해 인증을 올릴 수 없으므로, 수락되는 순간 **결과가 이미 정해진 챌린지**가
+     * 새로 시작된다. 그건 승부가 아니다.
+     *
+     * **받은 것(opponent)**: 수락 권한이 탈퇴자에게 있는데 그가 없으므로 **아무도 수락할 수
+     * 없다.** 마감이 지나면 자연 만료되므로 지울 이유가 없다 — 지우면 상대(살아 있는 사용자)가
+     * *"내가 보낸 도전장"* 을 잃는다.
+     *
+     * ## 왜 물리 삭제가 안전한가
+     *
+     * `PENDING` 에는 계약서·서명·사진·결과가 **하나도 없다.** 보존할 증거가 0 이라 [deleteById]
+     * 로 챌린저가 직접 취소하는 것과 **결과가 정확히 같다** — 이미 존재하는 그 경로를 탈퇴가
+     * 일괄로 밟는 것뿐이다.
+     *
+     * ⚠️ `IN_PROGRESS`·`COMPLETED` 는 **절대 대상이 아니다.** 조건이 `status = 'PENDING'`
+     * 리터럴로 고정돼 있어 다른 상태가 흘러들 수 없다 (`ChallengeJpaRepository` 의 같은 판단).
+     *
+     * @return 삭제된 row 수. 호출부는 로그에만 쓴다 — 0 건도 정상이다.
+     */
+    fun deletePendingSentBy(userId: Long): Int
 }

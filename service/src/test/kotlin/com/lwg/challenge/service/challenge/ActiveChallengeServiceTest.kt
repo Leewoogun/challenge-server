@@ -325,6 +325,15 @@ class ActiveChallengeServiceTest {
 
         override fun findById(id: Long): Challenge? = store[id]
 
+        /** 보관함 전용 — 이 테스트가 다루는 경로가 아니다 (`ChallengeHistoryServiceTest` 소관). */
+        override fun findCompletedHistoryByUserInMonth(
+            userId: Long,
+            monthStart: LocalDate,
+            nextMonthStart: LocalDate,
+        ): List<Challenge> = emptyList()
+
+        override fun findEarliestCompletedChallengeDate(userId: Long): LocalDate? = null
+
         override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> = emptyList()
 
         override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> =
@@ -343,6 +352,8 @@ class ActiveChallengeServiceTest {
         override fun saveAndFlush(challenge: Challenge): Challenge = error("조회 전용 서비스가 저장을 시도했다")
 
         override fun deleteById(id: Long) = error("조회 전용 서비스가 삭제를 시도했다")
+
+        override fun deletePendingSentBy(userId: Long): Int = error("조회 전용 서비스가 삭제를 시도했다")
     }
 
     private class FakeUsers : UserRepository {
@@ -366,6 +377,9 @@ class ActiveChallengeServiceTest {
         override fun clearFcmTokenOwnedByOthers(fcmToken: String, exceptUserId: Long): Int = 0
 
         override fun updateFcmToken(userId: Long, fcmToken: String?): Int = 1
+
+        override fun anonymizeForWithdrawal(userId: Long, anonymizedNickname: String, now: LocalDateTime): Int =
+            error("조회 전용 서비스가 익명화를 시도했다")
     }
 
     private class FakeVerificationStore : VerificationRepository {
@@ -379,6 +393,11 @@ class ActiveChallengeServiceTest {
             store.filter { it.challengeId in challengeIds }
 
         override fun save(verification: Verification): Verification = error("조회 전용 서비스가 저장을 시도했다")
+
+        override fun findAllByUserId(userId: Long): List<Verification> =
+            store.filter { it.userId == userId }
+
+        override fun clearPhotoKeysByUserId(userId: Long): Int = error("조회 전용 서비스가 key 제거를 시도했다")
 
         override fun saveAllAndFlush(verifications: Collection<Verification>): List<Verification> =
             error("조회 전용 서비스가 저장을 시도했다")

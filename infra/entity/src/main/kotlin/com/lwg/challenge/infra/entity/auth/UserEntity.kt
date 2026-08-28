@@ -27,8 +27,14 @@ class UserEntity(
     @Column(name = "id")
     var id: Long? = null,
 
-    @Column(name = "kakao_id", nullable = false, unique = true)
-    var kakaoId: Long,
+    /**
+     * 탈퇴 시 NULL 이 된다 (mypage T-B2 — `V11__user_withdrawal.sql`).
+     *
+     * `unique = true` 는 그대로 둔다 — Postgres 는 UNIQUE 컬럼에 NULL 을 여러 개 허용하므로
+     * 탈퇴자가 N명이어도 충돌하지 않고, 제약을 풀면 살아 있는 계정의 중복 가입을 막을 수 없다.
+     */
+    @Column(name = "kakao_id", nullable = true, unique = true)
+    var kakaoId: Long?,
 
     @Column(name = "nickname", nullable = false, length = 50)
     var nickname: String,

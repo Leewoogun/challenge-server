@@ -2,6 +2,7 @@ package com.lwg.challenge.infra.jpa.challenge
 
 import com.lwg.challenge.infra.entity.challenge.ChallengeEntity
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.time.LocalDate
@@ -59,6 +60,75 @@ interface ChallengeJpaRepository : JpaRepository<ChallengeEntity, Long> {
         @Param("userId") userId: Long,
         @Param("since") since: LocalDateTime,
     ): List<ChallengeEntity>
+
+    /**
+     * 계약서 보관함 — **한 달치** `status = 'COMPLETED'` 를 `challenge_date DESC, id DESC` 로 반환
+     * (mypage T-B1, 2026-08-28 월 단위 개정).
+     *
+     * ## 🔴 범위가 반개구간이다 — `>= :monthStart AND < :nextMonthStart`
+     *
+     * `BETWEEN` 이나 `<= 말일` 을 쓰지 않는다. 말일을 계산하려면 2월·윤년을 다루는 분기가
+     * 하나 생기는데, 반개구간은 **"다음 달 1일"** 하나만 알면 되고 그건
+     * `YearMonth.plusMonths(1).atDay(1)` 로 분기 없이 나온다. 경계 버그가 생길 자리를 없앤다.
+     *
+     * ## 🔴 정렬·범위 키가 `completed_at` 이 아니라 `challenge_date` 다
+     *
+     * [findRecentlyCompletedByUser] 와 **의도적으로 다르다.** 판정이 자정 직후 배치라
+     * 7월 31일 챌린지의 `completed_at` 은 8월 1일 00:05 다. `completed_at` 으로 범위를 자르면
+     * **7월 마지막 날 챌린지가 8월 응답에 들어간다** — 카드에 적힌 날짜(7/31)와 화면 상단의
+     * 월 표시(8월)가 한 화면에서 다른 말을 하게 된다. 홈 목록이 `completed_at DESC` 인 것은
+     * *"판정이 방금 났다"* 를 보여주는 다른 목적이라 서로 옳다.
+     *
+     * 2차 키가 `id DESC` 인 이유: `challenge_date` 는 날짜라 같은 날 여러 건이 가능하다.
+     * 동률에서 순서가 흔들리면 같은 목록을 두 번 불러올 때 카드 순서가 바뀐다.
+     *
+     * `status` 를 리터럴로 박은 것은 [findRecentlyCompletedByUser] 와 같은 판단이다 —
+     * 보관함은 `COMPLETED` 만 의미가 있고, 파라미터로 열어 두면 다른 값이 들어와
+     * **조용히 빈 결과가 된다.** (`EXPIRED` 를 제외하는 근거는
+     * `ChallengeRepository.findCompletedHistoryByUserInMonth` KDoc.)
+     *
+     * @param monthStart 조회 월의 1일 (포함)
+     * @param nextMonthStart 다음 달 1일 (**미포함**)
+     */
+    @Query(
+        """
+        SELECT c
+          FROM ChallengeEntity c
+         WHERE (c.challengerId = :userId OR c.opponentId = :userId)
+           AND c.status = 'COMPLETED'
+           AND c.challengeDate >= :monthStart
+           AND c.challengeDate < :nextMonthStart
+         ORDER BY c.challengeDate DESC, c.id DESC
+        """,
+    )
+    fun findCompletedHistoryByUserInMonth(
+        @Param("userId") userId: Long,
+        @Param("monthStart") monthStart: LocalDate,
+        @Param("nextMonthStart") nextMonthStart: LocalDate,
+    ): List<ChallengeEntity>
+
+    /**
+     * 보관함의 **과거 하한** — 이 사용자의 가장 오래된 `COMPLETED` 챌린지 날짜. 없으면 null.
+     *
+     * 앱의 `<` 화살표 비활성 판정에 쓴다. 이 날짜의 월보다 이전은 **0건인 것이 보장**되므로
+     * 그 아래로 걸어 들어가게 두면 *"더 뒤에 있을지도"* 라는 거짓 기대를 만든다
+     * (`ChallengeRepository.findEarliestCompletedChallengeDate` KDoc).
+     *
+     * `MIN` 을 쓰는 이유: `EXISTS(... < :monthStart)` 로도 불리언은 나오지만, 같은 인덱스
+     * 스캔으로 **가장 오래된 달 자체**까지 얻을 수 있다. 계약이 그 값을 노출하게 되면
+     * 쿼리를 다시 설계하지 않아도 된다.
+     *
+     * 범위 조건이 없다 — 하한은 조회 중인 달과 무관한 사용자 단위 상수다.
+     */
+    @Query(
+        """
+        SELECT MIN(c.challengeDate)
+          FROM ChallengeEntity c
+         WHERE (c.challengerId = :userId OR c.opponentId = :userId)
+           AND c.status = 'COMPLETED'
+        """,
+    )
+    fun findEarliestCompletedChallengeDate(@Param("userId") userId: Long): LocalDate?
 
     /**
      * 배치 판정 대상 — `status IN (:statuses) AND deadline <= :now`, deadline 오름차순.
@@ -146,4 +216,31 @@ interface ChallengeJpaRepository : JpaRepository<ChallengeEntity, Long> {
         @Param("me") me: Long,
         @Param("now") now: LocalDateTime,
     ): List<Array<Any?>>
+
+    /**
+     * 탈퇴자가 **보낸** `PENDING` 챌린지를 물리 삭제 (mypage T-B4 — 회원탈퇴).
+     *
+     * `opponent_id = :userId` 인 것은 **대상이 아니다** — 수락할 사람이 사라져 자연 만료되므로
+     * 지울 이유가 없고, 지우면 상대가 보낸 도전장을 잃는다. 전체 근거는
+     * `ChallengeRepository.deletePendingSentBy` KDoc.
+     *
+     * ## 🔴 `status` 를 파라미터로 열지 않은 이유가 여기서는 특히 무겁다
+     *
+     * [findRecentlyCompletedByUser] 는 잘못된 값이 들어오면 **조용히 빈 결과**가 되는 정도지만,
+     * 이건 DELETE 다 — 파라미터로 받으면 `IN_PROGRESS`/`COMPLETED` 가 흘러들어 **보존해야 할
+     * 챌린지를 지우는 쿼리**가 된다. 계약서·서명·사진·결과가 딸린, 상대의 기록이기도 한
+     * row 들이다. 넣을 수 없게 리터럴로 박는다.
+     *
+     * ⚠️ 벌크 DELETE 라 영속 컨텍스트를 거치지 않는다 (`FriendshipJpaRepository.deleteAllByUserId`
+     * 와 같은 주의). 탈퇴 경로는 삭제 후 challenges 를 다시 읽지 않는다.
+     */
+    @Modifying
+    @Query(
+        """
+        DELETE FROM ChallengeEntity c
+         WHERE c.challengerId = :userId
+           AND c.status = 'PENDING'
+        """,
+    )
+    fun deletePendingSentBy(@Param("userId") userId: Long): Int
 }

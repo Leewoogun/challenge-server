@@ -2,6 +2,7 @@ package com.lwg.challenge.infra.jpa.friend
 
 import com.lwg.challenge.infra.entity.friend.FriendshipEntity
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 
@@ -123,4 +124,24 @@ interface FriendshipJpaRepository : JpaRepository<FriendshipEntity, Long> {
         nativeQuery = true,
     )
     fun findReceivedRequestsOf(@Param("me") me: Long): List<Array<Any?>>
+
+    /**
+     * [userId] 가 낀 friendships row 를 방향 불문 물리 삭제 (mypage T-B2 — 회원탈퇴).
+     *
+     * `requesterId` / `receiverId` 는 `@ManyToOne` 연관이 아니라 **plain `Long` 컬럼**이라
+     * (`FriendshipEntity` 참조) `f.requester.id` 가 아니라 `f.requesterId` 로 쓴다.
+     *
+     * ⚠️ 벌크 DELETE 라 영속 컨텍스트를 거치지 않는다. 같은 트랜잭션에서 이 row 들을 다시 읽는
+     * 코드가 생기면 1차 캐시의 낡은 인스턴스를 볼 수 있다 — 탈퇴 경로는 삭제 후 이 테이블을
+     * 다시 읽지 않으므로 지금은 문제가 되지 않는다.
+     */
+    @Modifying
+    @Query(
+        """
+        DELETE FROM FriendshipEntity f
+         WHERE f.requesterId = :userId
+            OR f.receiverId = :userId
+        """,
+    )
+    fun deleteAllByUserId(@Param("userId") userId: Long): Int
 }

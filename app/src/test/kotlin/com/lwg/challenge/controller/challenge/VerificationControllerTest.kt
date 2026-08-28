@@ -186,12 +186,14 @@ class VerificationControllerTest {
                     status = VerificationStatus.VERIFIED,
                     photoUrl = "/api/v1/challenges/7/photos/challenger",
                     verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
+                    photoDeleted = false,
                 ),
                 opponent = PartyVerificationView(
                     userId = 14L,
                     status = VerificationStatus.PENDING,
                     photoUrl = null,
                     verifiedAt = null,
+                    photoDeleted = false,
                 ),
             ),
         )
@@ -218,8 +220,8 @@ class VerificationControllerTest {
         Mockito.`when`(verificationService.getVerifications(anyLong(), anyLong())).thenReturn(
             VerificationsView(
                 challengeId = 7L,
-                challenger = PartyVerificationView(1L, VerificationStatus.PENDING, null, null),
-                opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null),
+                challenger = PartyVerificationView(1L, VerificationStatus.PENDING, null, null, photoDeleted = false),
+                opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null, photoDeleted = false),
             ),
         )
 
@@ -228,6 +230,45 @@ class VerificationControllerTest {
 
         assertTrue(body.contains(""""photoUrl":null"""), "actual=$body")
         assertTrue(body.contains(""""verifiedAt":null"""), "actual=$body")
+        // 사진이 없는 것과 **탈퇴로 지워진 것**은 다르다 — 아직 안 올린 쪽은 false 다.
+        assertTrue(body.contains(""""photoDeleted":false"""), "actual=$body")
+    }
+
+    /**
+     * 🔴 탈퇴로 지워진 사진은 `photoUrl = null` 인 채 `photoDeleted = true` 로 나간다
+     * (mypage T-B1 부록 A).
+     *
+     * 앱은 `photoUrl == null` 을 이미 `"사진을 불러오지 못했어요"` 로 그리고 있다 — 그 문구를
+     * 탈퇴자가 빌려 쓰면 **영구 상태를 일시적 실패의 어휘로** 말하게 되고, 더 나쁘게는
+     * **진짜 데이터 이상이 탈퇴자 뒤에 숨는다.** 두 상태가 wire 에서 갈리는 것을 고정한다.
+     */
+    @Test
+    fun `탈퇴로 지워진 사진은 photoDeleted true 로 나간다`() {
+        Mockito.`when`(verificationService.getVerifications(anyLong(), anyLong())).thenReturn(
+            VerificationsView(
+                challengeId = 7L,
+                challenger = PartyVerificationView(
+                    userId = 1L,
+                    status = VerificationStatus.VERIFIED,
+                    photoUrl = null,
+                    verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
+                    photoDeleted = true,
+                ),
+                opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null, photoDeleted = false),
+            ),
+        )
+
+        val body = mockMvc.perform(get("/api/v1/challenges/7/verifications"))
+            .andExpect(status().isOk)
+            // 탈퇴는 row 를 보존한다 — status 와 verifiedAt 은 그대로다 (mypage T-B2).
+            .andExpect(jsonPath("$.data.challenger.status").value("VERIFIED"))
+            .andExpect(jsonPath("$.data.challenger.verifiedAt").value("2026-08-14 15:32:10"))
+            .andExpect(jsonPath("$.data.challenger.photoDeleted").value(true))
+            .andExpect(jsonPath("$.data.opponent.photoDeleted").value(false))
+            .andReturn().response.contentAsString
+
+        // key 부재와 값 null 은 모바일에서 서로 다른 예외라 원문까지 본다 (#24 선례).
+        assertTrue(body.contains(""""photoUrl":null"""), "actual=$body")
     }
 
     /** 🔴 spec 수용 기준: 제3자 요청은 거부되고 **사진 경로가 응답에 없다.** */

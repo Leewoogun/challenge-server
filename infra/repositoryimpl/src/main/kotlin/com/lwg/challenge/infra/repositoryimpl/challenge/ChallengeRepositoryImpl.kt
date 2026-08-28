@@ -32,6 +32,16 @@ class ChallengeRepositoryImpl(
     override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> =
         jpa.findRecentlyCompletedByUser(userId, since).map { it.toDomain() }
 
+    override fun findCompletedHistoryByUserInMonth(
+        userId: Long,
+        monthStart: LocalDate,
+        nextMonthStart: LocalDate,
+    ): List<Challenge> =
+        jpa.findCompletedHistoryByUserInMonth(userId, monthStart, nextMonthStart).map { it.toDomain() }
+
+    override fun findEarliestCompletedChallengeDate(userId: Long): LocalDate? =
+        jpa.findEarliestCompletedChallengeDate(userId)
+
     override fun findById(id: Long): Challenge? =
         jpa.findById(id).map { it.toDomain() }.orElse(null)
 
@@ -78,6 +88,9 @@ class ChallengeRepositoryImpl(
     override fun deleteById(id: Long) {
         jpa.deleteById(id)
     }
+
+    override fun deletePendingSentBy(userId: Long): Int =
+        jpa.deletePendingSentBy(userId)
 
     /** JDBC 드라이버가 `java.sql.Date` 로 줄 수도, 이미 `LocalDate` 로 줄 수도 있어 둘 다 받는다. */
     private fun toLocalDate(value: Any?): LocalDate = when (value) {

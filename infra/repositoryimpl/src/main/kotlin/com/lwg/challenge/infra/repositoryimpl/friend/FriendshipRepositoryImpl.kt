@@ -91,6 +91,9 @@ class FriendshipRepositoryImpl(
         jpa.deleteById(id)
     }
 
+    override fun deleteAllByUserId(userId: Long): Int =
+        jpa.deleteAllByUserId(userId)
+
     private fun toLocalDateTime(value: Any?): LocalDateTime = when (value) {
         is LocalDateTime -> value
         is Timestamp -> value.toLocalDateTime()

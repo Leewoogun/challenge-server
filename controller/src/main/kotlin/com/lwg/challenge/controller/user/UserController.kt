@@ -6,11 +6,13 @@ import com.lwg.challenge.controller.user.dto.UserInfoData
 import com.lwg.challenge.controller.user.dto.UserInfoResponse
 import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.service.user.UserService
+import com.lwg.challenge.service.user.WithdrawalService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.validation.Valid
 import org.springframework.security.core.context.SecurityContextHolder
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -25,9 +27,10 @@ import org.springframework.web.bind.annotation.RestController
  */
 @RestController
 @RequestMapping("/api/v1/users")
-@Tag(name = "User", description = "본인 정보 조회")
+@Tag(name = "User", description = "본인 정보 조회 / 회원탈퇴")
 class UserController(
     private val userService: UserService,
+    private val withdrawalService: WithdrawalService,
 ) {
 
     @GetMapping("/me")
@@ -42,7 +45,9 @@ class UserController(
         return UserInfoResponse(
             data = UserInfoData(
                 id = user.id ?: error("영속 user 의 id 가 null 일 수 없습니다"),
-                kakaoId = user.kakaoId,
+                // kakaoId 가 null 인 것은 탈퇴 계정뿐이고(mypage T-B2), [UserService.getMe] 가
+                // 그 경우 401 을 던지므로 여기 도달하면 non-null 이다. id 와 같은 성격의 단언이다.
+                kakaoId = user.kakaoId ?: error("탈퇴하지 않은 user 의 kakaoId 가 null 일 수 없습니다"),
                 nickname = user.nickname,
                 profileImageUrl = user.profileImageUrl,
             ),
@@ -69,6 +74,36 @@ class UserController(
     @SecurityRequirement(name = "bearerAuth")
     fun updateFcmToken(@Valid @RequestBody request: FcmTokenRequest): BaseResponse {
         userService.updateFcmToken(currentUserId(), request.fcmToken)
+        return BaseResponse()
+    }
+
+    /**
+     * 회원탈퇴 (mypage T-B2).
+     *
+     * 🔴 응답에 `data` 가 없다 — `logout` / `fcm-token` 등록과 **같은 shape** 이다. 서버가 돌려줄
+     * 것이 없어 [BaseResponse] 3필드(`error`/`code`/`message`)만 나간다. ⚠️ 모바일은 `data` 키가
+     * 온다고 가정하면 안 된다 (없는 키를 non-nullable 로 선언하면 `MissingFieldException`).
+     *
+     * **멱등하다** — 이미 탈퇴한 계정이 다시 불러도 200 이다. access token 이 최대 1시간 살아
+     * 있어 재요청이 실제로 가능하다 (`WithdrawalService` KDoc).
+     *
+     * ⚠️ **실패가 200 + code=701 로 나갈 수 있다.** 카카오 연결 해제가 이행되지 않으면
+     * `DialogException` 이 올라온다 — 탈퇴는 로그아웃과 달리 *"언제나 성공"* 이어서는 안 된다.
+     * 앱은 code 를 보고 성공/실패를 갈라야 하며 HTTP status 만 봐서는 안 된다.
+     *
+     * 인증이 필요하다 — SecurityConfig 의 permitAll 목록에 없고 `.anyRequest().authenticated()`
+     * 에 걸리므로, 여기 도달한 시점에 principal 은 항상 존재한다.
+     */
+    @DeleteMapping("/me")
+    @Operation(
+        summary = "회원탈퇴",
+        description = "카카오 연결을 끊고 users 개인정보를 익명화한다(row 는 보존). friendships 는 삭제되고 " +
+            "인증 사진 파일과 key 는 지워지지만 챌린지·계약서·결과·전적은 그대로 남는다. " +
+            "멱등하며 응답 body 에 data 가 없다. 카카오 연결 해제 실패 시 code=701.",
+    )
+    @SecurityRequirement(name = "bearerAuth")
+    fun withdraw(): BaseResponse {
+        withdrawalService.withdraw(currentUserId())
         return BaseResponse()
     }
 

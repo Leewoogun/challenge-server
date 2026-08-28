@@ -15,6 +15,9 @@ import com.lwg.challenge.controller.challenge.dto.ChallengeCreateData
 import com.lwg.challenge.controller.challenge.dto.ChallengeCreateResponse
 import com.lwg.challenge.controller.challenge.dto.ChallengeDetailData
 import com.lwg.challenge.controller.challenge.dto.ChallengeDetailResponse
+import com.lwg.challenge.controller.challenge.dto.ChallengeHistoryDto
+import com.lwg.challenge.controller.challenge.dto.ChallengeHistoryMonthData
+import com.lwg.challenge.controller.challenge.dto.ChallengeHistoryResponse
 import com.lwg.challenge.controller.challenge.dto.ChallengeStatusData
 import com.lwg.challenge.controller.challenge.dto.ChallengeVerificationsData
 import com.lwg.challenge.controller.challenge.dto.ChallengeVerificationsResponse
@@ -63,6 +66,7 @@ import org.springframework.boot.test.autoconfigure.json.JsonTest
 import org.springframework.context.annotation.Import
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.YearMonth
 
 /**
  * 응답 wire shape 회귀 방지 — **필드가 사라지거나 이름이 바뀌면 실패한다** (#25 발견 D).
@@ -211,15 +215,19 @@ class WireShapeContractTest {
     }
 
     /**
-     * `PUT /users/me/fcm-token` 과 `DELETE /auth/logout` 은 **둘 다 `BaseResponse()` 를 그대로**
-     * 반환하므로 이 한 건이 두 엔드포인트를 덮는다.
+     * `PUT /users/me/fcm-token`, `DELETE /auth/logout`, `DELETE /users/me`(회원탈퇴 — mypage T-B2)
+     * 는 **전부 `BaseResponse()` 를 그대로** 반환하므로 이 한 건이 세 엔드포인트를 덮는다.
+     *
+     * 🔴 새 엔드포인트를 위해 **같은 단언을 복제하지 않는다.** 고정하려는 것은 "누가 반환하는가"
+     * 가 아니라 **타입 하나의 wire shape** 이라, 테스트를 늘리면 대상은 그대로인데 실패 지점만
+     * 늘어난다. 합류시키고 이름·설명을 갱신하는 것이 맞다.
      *
      * ⚠️ *"어느 컨트롤러가 이 타입을 반환하는가"* 는 여기서 알 수 없다 — 그건 슬라이스 테스트
      * (`UserControllerTest` / `AuthControllerTest`)가 응답 원문으로 확인한다.
      */
     @Test
-    fun `data 없는 응답 - fcm-token 등록과 logout`() {
-        assertNoDataResponse(BaseResponse(), "BaseResponse (fcm-token 등록 / logout 공통)")
+    fun `data 없는 응답 - fcm-token 등록과 logout 과 회원탈퇴`() {
+        assertNoDataResponse(BaseResponse(), "BaseResponse (fcm-token 등록 / logout / 회원탈퇴 공통)")
     }
 
     // ─── user / record ───────────────────────────────────────────
@@ -449,6 +457,116 @@ class WireShapeContractTest {
         assertEquals("BOTH_LOSE", card.path("myResult").asText())
     }
 
+    /**
+     * 계약서 보관함 — 한 달치 (mypage T-B1, 2026-08-28 월 단위 개정).
+     *
+     * 🔴 **data 가 3키인 것과 카드가 7필드인 것이 각각 계약이다.**
+     *
+     * data 쪽: 1차는 `histories` 하나였고 개정으로 `month`·`firstArchivedMonth` 가 붙었다.
+     * 이 둘이 사라지면 앱이 **월 표시와 화살표를 그릴 근거를 통째로 잃는다** — 목록은 멀쩡히
+     * 나가므로 jsonPath 로 목록만 보는 테스트는 그 사고를 통과시킨다.
+     *
+     * 카드 쪽(design §7-④): 이 테스트는 원래 *"키가 사라지면 실패"* 만 보지만, 여기서는
+     * `added` 쪽도 눈여겨봐야 한다 — 홈 카드와 모양을 맞추자며 `result`(역할 기준)나 인증
+     * 상태 2필드를 되살리기 쉬운 자리이고, 그건 **추가가 아니라 결정의 번복**이다.
+     * 그 축은 `ChallengeHistoryControllerTest` 가 원문으로 막는다.
+     *
+     * 세 시간 필드(`month`·`firstArchivedMonth`·`challengeDate`)는 값까지 본다 —
+     * `[2026,8]` / `[2026,8,24]` **배열**로 새는 회귀가 이 프로젝트에 실제로 있었던 실패 모드다.
+     */
+    @Test
+    fun `ChallengeHistoryResponse - 월 3키 + 카드 7필드`() {
+        val response = ChallengeHistoryResponse(
+            ChallengeHistoryMonthData(
+                month = YearMonth.of(2026, 8),
+                firstArchivedMonth = YearMonth.of(2026, 3),
+                histories = listOf(
+                    ChallengeHistoryDto(
+                        challengeId = 1001L,
+                        challengeDate = LocalDate.of(2026, 8, 24),
+                        opponentNickname = "민수",
+                        myMission = "오늘 운동 1시간 하기",
+                        opponentMission = "책 30페이지 읽기",
+                        bet = "커피 사기",
+                        myResult = Outcome.BOTH_LOSE,
+                    ),
+                ),
+            ),
+        )
+        val data = dataOf(response)
+        assertKeys(setOf("month", "firstArchivedMonth", "histories"), data, "ChallengeHistoryMonthData")
+
+        // 🔴 `yyyy-MM` 평문 문자열. WIRE_MONTH 가 빠지면 `[2026,8]` 배열이 된다.
+        assertEquals("2026-08", data.path("month").asText())
+        assertEquals("2026-03", data.path("firstArchivedMonth").asText())
+
+        val card = data.path("histories").first()
+        assertKeys(
+            setOf(
+                "challengeId", "challengeDate", "opponentNickname",
+                "myMission", "opponentMission", "bet", "myResult",
+            ),
+            card,
+            "ChallengeHistoryDto",
+        )
+        assertEquals("2026-08-24", card.path("challengeDate").asText())
+        // 🔴 BOTH_LOSE 는 LOSE 로 접히지 않고 그대로 나간다 (`Outcome` KDoc).
+        assertEquals("BOTH_LOSE", card.path("myResult").asText())
+    }
+
+    /**
+     * 🔴 보관함은 **빌 수 있다** — `rankings` 가 *"절대 비지 않는다"* 인 것과 반대 축이라
+     * 빈 배열이 실제로 직렬화되는지까지 본다. 모바일의 빈 상태 판정이 여기 달려 있다.
+     *
+     * 개정 후에는 이 경우가 **더 흔해졌다** — 빈 달을 건너뛰지 않는 것이 확정된 동작이라
+     * 사용자가 화살표를 누르는 대부분의 달이 `[]` 다. 그리고 그때도 `month`·`firstArchivedMonth`
+     * 는 함께 나가야 한다.
+     */
+    @Test
+    fun `ChallengeHistoryResponse - 빈 달도 month 와 하한 신호를 함께 낸다`() {
+        val response = ChallengeHistoryResponse(
+            ChallengeHistoryMonthData(
+                month = YearMonth.of(2026, 4),
+                firstArchivedMonth = YearMonth.of(2026, 3),
+                histories = emptyList(),
+            ),
+        )
+        val data = dataOf(response)
+
+        assertKeys(setOf("month", "firstArchivedMonth", "histories"), data, "ChallengeHistoryMonthData (빈 달)")
+        assertEquals("2026-04", data.path("month").asText())
+        assertEquals("2026-03", data.path("firstArchivedMonth").asText())
+        assertTrue(
+            mapper.writeValueAsString(response).contains(""""histories":[]"""),
+            "원문에 histories 가 빈 배열로 남아 있어야 한다",
+        )
+    }
+
+    /**
+     * 🔴 **`firstArchivedMonth` 가 `null` 이어도 키는 남는다** — 기록 0건 계정.
+     *
+     * 이 프로젝트 Jackson 에 `@JsonInclude(NON_NULL)` 이 없다는 것(이 파일 최상단 KDoc 실측)에
+     * 모바일이 기대고 있다. 나중에 누가 전역으로 `NON_NULL` 을 켜면 **키가 조용히 사라지고**,
+     * 앱은 *"기록 전무"* 를 판정할 신호를 잃은 채 빈 달 화면을 그린다 — 목록은 멀쩡히 `[]` 라
+     * 다른 어떤 단언도 이걸 못 잡는다.
+     */
+    @Test
+    fun `ChallengeHistoryResponse - firstArchivedMonth 는 null 이어도 키가 남는다`() {
+        val response = ChallengeHistoryResponse(
+            ChallengeHistoryMonthData(
+                month = YearMonth.of(2026, 8),
+                firstArchivedMonth = null,
+                histories = emptyList(),
+            ),
+        )
+
+        assertKeys(setOf("month", "firstArchivedMonth", "histories"), dataOf(response), "ChallengeHistoryMonthData (기록 0건)")
+        assertTrue(
+            mapper.writeValueAsString(response).contains(""""firstArchivedMonth":null"""),
+            "null 이어도 키가 원문에 남아 있어야 한다",
+        )
+    }
+
     @Test
     fun `ReceivedChallengesResponse - 받은 도전장 8필드`() {
         val data = dataOf(
@@ -580,11 +698,48 @@ class WireShapeContractTest {
         val data = dataOf(ChallengeVerificationsResponse(verificationsData()))
         assertKeys(setOf("challengeId", "challenger", "opponent"), data, "ChallengeVerificationsData")
         assertKeys(
-            setOf("userId", "status", "photoUrl", "verifiedAt"),
+            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted"),
             data.path("challenger"),
             "PartyVerificationDto",
         )
         assertEquals("2026-08-14 15:32:10", data.path("challenger").path("verifiedAt").asText())
+    }
+
+    /**
+     * `photoDeleted` 는 **non-null Boolean 이고 기본이 `false`** 다 (mypage T-B1 부록 A —
+     * challenge-verification 계약의 additive 변경).
+     *
+     * 🔴 값까지 보는 이유: 이 필드가 `true` 로 새면 앱이 정상 사진 자리를 *"탈퇴로 삭제됨"* 으로
+     * 그린다. 그리고 **키가 사라지면 모바일 `Boolean` 에 기본값이 없어 파싱이 터진다** —
+     * nullable 이 아니라서 `@JsonInclude` 류의 설정 변화에 오히려 더 약하다.
+     */
+    @Test
+    fun `PartyVerificationDto - photoDeleted 는 키가 있고 기본이 false 다`() {
+        val response = ChallengeVerificationsResponse(verificationsData())
+        val data = dataOf(response)
+
+        assertTrue(data.path("challenger").path("photoDeleted").isBoolean, "photoDeleted 는 Boolean 이어야 한다")
+        assertEquals(false, data.path("challenger").path("photoDeleted").asBoolean())
+        assertEquals(false, data.path("opponent").path("photoDeleted").asBoolean())
+        assertTrue(
+            mapper.writeValueAsString(response).contains(""""photoDeleted":false"""),
+            "원문에 photoDeleted 키가 false 로 남아 있어야 한다",
+        )
+    }
+
+    /** 탈퇴로 사진이 지워진 쪽은 `photoUrl = null` 인 채 `photoDeleted = true` 로 나간다. */
+    @Test
+    fun `PartyVerificationDto - 탈퇴로 지워진 사진은 photoUrl null 에 photoDeleted true 다`() {
+        val response = ChallengeVerificationsResponse(
+            verificationsData().copy(
+                challenger = verificationsData().challenger.copy(photoUrl = null, photoDeleted = true),
+            ),
+        )
+        val challenger = dataOf(response).path("challenger")
+
+        assertEquals("VERIFIED", challenger.path("status").asText(), "탈퇴는 row 를 보존한다 — status 는 그대로다")
+        assertTrue(challenger.path("photoUrl").isNull, "key 가 지워졌으므로 경로도 null 이다")
+        assertEquals(true, challenger.path("photoDeleted").asBoolean())
     }
 
     /**
@@ -600,7 +755,7 @@ class WireShapeContractTest {
         val opponent = dataOf(response).path("opponent")
 
         assertKeys(
-            setOf("userId", "status", "photoUrl", "verifiedAt"),
+            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted"),
             opponent,
             "PartyVerificationDto (PENDING)",
         )
@@ -621,12 +776,15 @@ class WireShapeContractTest {
             status = VerificationStatus.VERIFIED,
             photoUrl = "/api/v1/challenges/7/photos/challenger",
             verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
+            // 정상 사용자 — 사진이 살아 있다. 탈퇴 케이스는 별도 테스트에서 copy 로 만든다.
+            photoDeleted = false,
         ),
         opponent = PartyVerificationDto(
             userId = 14L,
             status = VerificationStatus.PENDING,
             photoUrl = null,
             verifiedAt = null,
+            photoDeleted = false,
         ),
     )
 

@@ -13,4 +13,7 @@ class NotificationRepositoryImpl(
 
     override fun save(notification: Notification): Notification =
         jpa.save(NotificationEntity.fromDomain(notification)).toDomain()
+
+    override fun deleteAllByUserId(userId: Long): Int =
+        jpa.deleteAllByUserId(userId)
 }

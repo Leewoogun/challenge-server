@@ -187,4 +187,29 @@ internal class FakeUserRepository : UserRepository {
         store[userId] = current.copy(fcmToken = fcmToken)
         return 1
     }
+
+    /**
+     * 익명화되는 컬럼을 **하나도 빠짐없이** 재현한다 (mypage T-B2).
+     *
+     * `clearFcmTokenOwnedByOthers` 의 `AND id <> :me` 와 같은 이유다 — fake 가 컬럼을 빠뜨리면
+     * 프로덕션 JPQL 이 그 컬럼을 안 밀어도 테스트가 통과한다. `id`/`createdAt` 을 그대로 두는
+     * 것까지가 계약이다.
+     */
+    override fun anonymizeForWithdrawal(userId: Long, anonymizedNickname: String, now: LocalDateTime): Int {
+        calls += "anonymizeForWithdrawal($userId, nickname=$anonymizedNickname)"
+        val current = store[userId] ?: return 0
+        store[userId] = current.copy(
+            kakaoId = null,
+            nickname = anonymizedNickname,
+            profileImageUrl = null,
+            phoneNumber = null,
+            phoneVerified = false,
+            fcmToken = null,
+            refreshTokenHash = null,
+            refreshTokenIssuedAt = null,
+            status = UserStatus.DELETED,
+            updatedAt = now,
+        )
+        return 1
+    }
 }

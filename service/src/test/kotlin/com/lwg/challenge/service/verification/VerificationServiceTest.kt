@@ -9,6 +9,9 @@ import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.notification.NotificationType
 import com.lwg.challenge.domain.photo.PhotoStorage
+import com.lwg.challenge.domain.user.User
+import com.lwg.challenge.domain.user.UserRepository
+import com.lwg.challenge.domain.user.UserStatus
 import com.lwg.challenge.domain.verification.Verification
 import com.lwg.challenge.domain.verification.VerificationRepository
 import com.lwg.challenge.domain.verification.VerificationStatus
@@ -37,6 +40,7 @@ import java.time.LocalDateTime
  * - 같은 사용자가 두 번 제출해도 row 가 하나다
  * - `IN_PROGRESS` 가 아닌 챌린지에는 제출할 수 없다
  * - 🔴 재제출은 전면 거부다 (계약 §3) — 그리고 **거부된 제출은 저장소에 아무것도 남기지 않는다**
+ * - 🔴 `photoDeleted` 가 **탈퇴로 지워진 사진과 진짜 데이터 이상을 가른다** (mypage T-B1 부록 A)
  *
  * ⚠️ **덮지 못하는 것**: `AFTER_COMMIT` 타이밍. 이 테스트에는 트랜잭션이 없어 알 수 있는 것은
  * *무엇을 발행했는가* 뿐이다 (`NotificationDispatcherTest` 와 같은 한계).
@@ -45,11 +49,12 @@ class VerificationServiceTest {
 
     private val challenges = FakeChallengeRepository()
     private val verifications = FakeVerificationRepository()
+    private val users = FakeUserStore()
     private val photos = FakePhotoStorage()
     private val events = RecordingEventPublisher()
     private val clock = Clock.fixed(Instant.parse("2026-08-14T06:32:10Z"), KstTime.ZONE)
 
-    private val service = VerificationService(challenges, verifications, photos, clock, events)
+    private val service = VerificationService(challenges, verifications, users, photos, clock, events)
 
     private companion object {
         const val CHALLENGE_ID = 7L
@@ -69,7 +74,24 @@ class VerificationServiceTest {
         challenges.put(challenge(ChallengeStatus.IN_PROGRESS))
         verifications.save(pending(CHALLENGER))
         verifications.save(pending(OPPONENT))
+        // 기본은 양쪽 다 살아 있는 계정이다 — 탈퇴 케이스만 테스트에서 따로 밀어 넣는다.
+        users.put(user(CHALLENGER, UserStatus.ACTIVE))
+        users.put(user(OPPONENT, UserStatus.ACTIVE))
     }
+
+    private fun user(id: Long, status: UserStatus) = User(
+        id = id,
+        // 탈퇴는 kakao_id 를 지운다 (V11) — 그 사실까지 흉내내야 fake 가 거짓말을 하지 않는다.
+        kakaoId = if (status == UserStatus.DELETED) null else 9000_000L + id,
+        nickname = if (status == UserStatus.DELETED) "탈퇴한 사용자" else "사용자$id",
+        profileImageUrl = null,
+        phoneNumber = null,
+        phoneVerified = false,
+        fcmToken = null,
+        status = status,
+        createdAt = LocalDateTime.of(2026, 8, 1, 0, 0),
+        updatedAt = LocalDateTime.of(2026, 8, 1, 0, 0),
+    )
 
     private fun challenge(status: ChallengeStatus) = Challenge(
         id = CHALLENGE_ID,
@@ -339,6 +361,74 @@ class VerificationServiceTest {
         assertNull(view.challenger.photoUrl)
     }
 
+    // ─── photoDeleted (mypage T-B1 부록 A) ───────────────────────
+
+    /**
+     * 🔴 이 필드가 존재하는 이유 그 자체다.
+     *
+     * 탈퇴는 row(`status`/`verified_at`)를 보존한 채 사진 파일과 key 만 지운다 (mypage T-B2).
+     * 그 결과 `VERIFIED` + `photoUrl = null` 이 나오는데, 앱은 그 조합을 이미
+     * `"사진을 불러오지 못했어요"` 로 그리고 있다 — **영구 상태를 일시적 실패의 어휘로**
+     * 말하게 된다. `photoDeleted` 가 둘을 가른다.
+     */
+    @Test
+    fun `탈퇴자의 지워진 사진은 photoDeleted 가 true 다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        // T-B2 의 탈퇴 처리를 그대로 흉내낸다 — key 만 지우고 row 는 남긴다.
+        verifications.clearPhotoKeysByUserId(CHALLENGER)
+        users.put(user(CHALLENGER, UserStatus.DELETED))
+
+        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+
+        assertTrue(view.challenger.photoDeleted, "탈퇴로 지워진 사진은 photoDeleted = true 여야 한다")
+        // 기존 필드의 의미는 하나도 바뀌지 않는다 — 순수 추가다.
+        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
+        assertNull(view.challenger.photoUrl, "key 가 없으므로 경로도 없다")
+    }
+
+    @Test
+    fun `사진이 살아 있으면 photoDeleted 가 false 다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+
+        assertEquals(false, view.challenger.photoDeleted)
+        assertNotNull(view.challenger.photoUrl)
+    }
+
+    /**
+     * 🔴 **진짜 데이터 이상이 탈퇴자 뒤에 숨지 않는다는 것을 고정하는 테스트다.**
+     *
+     * `VERIFIED` 인데 key 가 없는데 owner 는 멀쩡히 살아 있다 = 탈퇴가 아니라 **버그**다.
+     * 여기서 `true` 를 내보내면 앱이 *"탈퇴로 지워진 사진"* 으로 그려 버리고, 우리는
+     * 그 이상을 영영 발견하지 못한다. 판정식에 `status == DELETED` 가 들어 있는 이유가 이것뿐이다.
+     */
+    @Test
+    fun `VERIFIED 인데 key 가 없어도 owner 가 살아 있으면 photoDeleted 는 false 다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        verifications.clearPhotoKeysByUserId(CHALLENGER)
+        // users 는 그대로 ACTIVE 다 — 탈퇴하지 않았는데 key 만 사라진 상태.
+
+        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+
+        assertEquals(
+            false,
+            view.challenger.photoDeleted,
+            "탈퇴가 아닌 key 부재는 데이터 이상이다 — 탈퇴자 뒤에 숨기면 영영 발견하지 못한다",
+        )
+    }
+
+    /** 애초에 사진이 없었던 탈퇴자 — 지워진 것이 아니므로 `false` 다. */
+    @Test
+    fun `PENDING 인 탈퇴자는 photoDeleted 가 false 다`() {
+        users.put(user(OPPONENT, UserStatus.DELETED))
+
+        val view = service.getVerifications(CHALLENGER, CHALLENGE_ID)
+
+        assertEquals(VerificationStatus.PENDING, view.opponent.status)
+        assertEquals(false, view.opponent.photoDeleted, "올린 적이 없는 사진은 삭제된 것이 아니다")
+    }
+
     // ─── 사진 읽기 (2026-08-18 2차 결정 — 조회 서명 URL 폐기) ────
 
     @Test
@@ -474,6 +564,15 @@ private class FakeChallengeRepository : ChallengeRepository {
     /** 홈 목록 전용 — 이 테스트가 다루는 경로가 아니다 (`ActiveChallengeServiceTest` 소관). */
     override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> = emptyList()
 
+    /** 보관함 전용 — 이 테스트가 다루는 경로가 아니다 (`ChallengeHistoryServiceTest` 소관). */
+    override fun findCompletedHistoryByUserInMonth(
+        userId: Long,
+        monthStart: LocalDate,
+        nextMonthStart: LocalDate,
+    ): List<Challenge> = emptyList()
+
+    override fun findEarliestCompletedChallengeDate(userId: Long): LocalDate? = null
+
     /** 판정 배치 전용 — 이 테스트가 다루는 경로가 아니다 (`ChallengeJudgementRunnerTest` 소관). */
     override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> =
         emptyList()
@@ -490,6 +589,9 @@ private class FakeChallengeRepository : ChallengeRepository {
     override fun deleteById(id: Long) {
         store.remove(id)
     }
+
+    /** 탈퇴 전용 — 이 테스트가 다루는 경로가 아니다 (`WithdrawalServiceTest` 소관). */
+    override fun deletePendingSentBy(userId: Long): Int = 0
 }
 
 private class FakeVerificationRepository : VerificationRepository {
@@ -511,6 +613,54 @@ private class FakeVerificationRepository : VerificationRepository {
 
     override fun saveAllAndFlush(verifications: Collection<Verification>): List<Verification> =
         verifications.map { save(it) }
+
+    override fun findAllByUserId(userId: Long): List<Verification> =
+        store.filter { it.userId == userId }
+
+    override fun clearPhotoKeysByUserId(userId: Long): Int {
+        val targets = store.filter { it.userId == userId && it.photoUrl != null }
+        targets.forEach { target ->
+            store.removeAll { it.id == target.id }
+            store.add(target.copy(photoUrl = null))
+        }
+        return targets.size
+    }
+}
+
+/**
+ * `photoDeleted` 판정에 필요한 **계정 상태**만 들고 있는 [UserRepository].
+ *
+ * 조회 경로가 쓰는 것은 [findAllByIds] 하나뿐이다. 나머지 메서드는 이 서비스가 부르면
+ * 그 자체가 버그이므로 [error] 로 못박는다 — 조용히 no-op 을 돌려주면 잘못된 호출이
+ * 테스트를 통과해 버린다.
+ */
+private class FakeUserStore : UserRepository {
+    private val store = LinkedHashMap<Long, User>()
+
+    fun put(u: User) {
+        store[u.id!!] = u
+    }
+
+    override fun findAllByIds(ids: Collection<Long>): Map<Long, User> =
+        ids.mapNotNull { store[it] }.associateBy { it.id!! }
+
+    override fun findById(id: Long): User? = store[id]
+
+    override fun findByKakaoId(kakaoId: Long): User? = store.values.firstOrNull { it.kakaoId == kakaoId }
+
+    override fun save(user: User): User = error("인증 서비스가 user 를 저장하려 했다")
+
+    override fun updateRefreshTokenHash(userId: Long, hash: String?, issuedAt: LocalDateTime?) =
+        error("인증 서비스가 토큰을 건드리려 했다")
+
+    override fun clearFcmTokenOwnedByOthers(fcmToken: String, exceptUserId: Long): Int =
+        error("인증 서비스가 FCM 토큰을 건드리려 했다")
+
+    override fun updateFcmToken(userId: Long, fcmToken: String?): Int =
+        error("인증 서비스가 FCM 토큰을 건드리려 했다")
+
+    override fun anonymizeForWithdrawal(userId: Long, anonymizedNickname: String, now: LocalDateTime): Int =
+        error("인증 서비스가 익명화를 시도했다")
 }
 
 /** ⚠️ `AFTER_COMMIT` 의미를 흉내내지 않는다 — 발행 즉시 기록한다. */

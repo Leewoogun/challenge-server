@@ -78,6 +78,15 @@ internal class FakeChallenges : ChallengeRepository {
             .filter { it.status == ChallengeStatus.COMPLETED && it.completedAt != null && it.completedAt!! > since }
             .sortedByDescending { it.completedAt }
 
+    /** 보관함 전용 — 이 테스트가 다루는 경로가 아니다 (`ChallengeHistoryServiceTest` 소관). */
+    override fun findCompletedHistoryByUserInMonth(
+        userId: Long,
+        monthStart: LocalDate,
+        nextMonthStart: LocalDate,
+    ): List<Challenge> = emptyList()
+
+    override fun findEarliestCompletedChallengeDate(userId: Long): LocalDate? = null
+
     override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> = emptyList()
 
     override fun findConflicting(
@@ -98,6 +107,9 @@ internal class FakeChallenges : ChallengeRepository {
     override fun deleteById(id: Long) {
         store.remove(id)
     }
+
+    /** 탈퇴 전용 — 이 테스트가 다루는 경로가 아니다 (`WithdrawalServiceTest` 소관). */
+    override fun deletePendingSentBy(userId: Long): Int = 0
 }
 
 internal class FakeVerifications : VerificationRepository {
@@ -123,6 +135,19 @@ internal class FakeVerifications : VerificationRepository {
 
     override fun saveAllAndFlush(verifications: Collection<Verification>): List<Verification> =
         verifications.map { save(it) }
+
+    override fun findAllByUserId(userId: Long): List<Verification> =
+        store.filter { it.userId == userId }
+
+    /** ⚠️ [save] 를 거치지 않는다 — [saveCount] 단언을 오염시키지 않기 위함이다. */
+    override fun clearPhotoKeysByUserId(userId: Long): Int {
+        val targets = store.filter { it.userId == userId && it.photoUrl != null }
+        targets.forEach { target ->
+            store.removeAll { it.id == target.id }
+            store.add(target.copy(photoUrl = null))
+        }
+        return targets.size
+    }
 }
 
 internal class FakeUserRecords : UserRecordRepository {

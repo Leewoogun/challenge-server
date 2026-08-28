@@ -75,4 +75,42 @@ interface UserJpaRepository : JpaRepository<UserEntity, Long> {
         @Param("userId") userId: Long,
         @Param("fcmToken") fcmToken: String?,
     ): Int
+
+    /**
+     * 회원탈퇴 익명화 — 개인정보 컬럼을 한 번의 UPDATE 로 전부 민다 (mypage T-B2).
+     *
+     * 컬럼별 근거는 `UserRepository.anonymizeForWithdrawal` KDoc 과
+     * `V11__user_withdrawal.sql` 참조.
+     *
+     * 🔴 `updatedAt` 을 **인자로 받아 직접 쓴다.** 위 두 벌크 UPDATE 와 마찬가지로 영속 컨텍스트를
+     * 거치지 않아 `@PreUpdate` 가 돌지 않는데, 그쪽과 달리 여기서는 `updated_at` 이 **반드시**
+     * 갱신돼야 한다 — 탈퇴는 기기 상태가 아니라 사용자 프로필의 논리적 변경이고, 언제 익명화됐는지가
+     * 남지 않으면 나중에 확인할 방법이 없다.
+     *
+     * ⚠️ `status` 는 문자열 리터럴이다. `UserEntity.status` 가 enum 이 아니라 `String` 이기 때문이며
+     * (`UserStatus.valueOf` 는 `toDomain` 에서 한다), `'DELETED'` 는 `UserStatus.DELETED.name` 과
+     * 같아야 한다.
+     */
+    @Modifying
+    @Query(
+        """
+        UPDATE UserEntity u
+           SET u.kakaoId = null,
+               u.nickname = :nickname,
+               u.profileImageUrl = null,
+               u.phoneNumber = null,
+               u.phoneVerified = false,
+               u.fcmToken = null,
+               u.refreshTokenHash = null,
+               u.refreshTokenIssuedAt = null,
+               u.status = 'DELETED',
+               u.updatedAt = :now
+         WHERE u.id = :userId
+        """,
+    )
+    fun anonymizeForWithdrawal(
+        @Param("userId") userId: Long,
+        @Param("nickname") nickname: String,
+        @Param("now") now: LocalDateTime,
+    ): Int
 }

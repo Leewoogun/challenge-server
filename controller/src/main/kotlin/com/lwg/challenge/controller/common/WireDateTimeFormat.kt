@@ -21,3 +21,16 @@ const val WIRE_DATETIME = "yyyy-MM-dd HH:mm:ss"
 
 /** 날짜 전용 필드 패턴. 현재 `challengeDate` 하나만 쓴다 (api-contract §2.4). */
 const val WIRE_DATE = "yyyy-MM-dd"
+
+/**
+ * 월 전용 필드 패턴. 계약서 보관함의 조회 단위(`?month=` 와 응답의 `month` 에코)에 쓴다
+ * — mypage api-contract §1, 2026-08-28 월 단위 개정.
+ *
+ * 🔴 [WIRE_DATE] 의 앞 7글자와 **의도적으로 같다.** 위 규약("`T` 없음 · offset 없음 · KST")의
+ * 연장이며 새 축이 아니다.
+ *
+ * ⚠️ `YearMonth` 를 `@JsonFormat` 없이 두면 Jackson 설정에 따라 `[2026,8]` **배열**로 샐 수
+ * 있다. `challengeDate` 가 `[2026,8,24]` 로 새던 회귀가 이 프로젝트에 실제로 있었고
+ * (`WireShapeContractTest` 가 그 축을 값까지 본다), 같은 실패 모드가 이 필드에도 열려 있다.
+ */
+const val WIRE_MONTH = "yyyy-MM"

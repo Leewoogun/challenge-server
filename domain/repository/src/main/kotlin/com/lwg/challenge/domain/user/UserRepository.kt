@@ -70,4 +70,40 @@ interface UserRepository {
      *         (탈퇴·삭제된 계정의 access token 이 아직 유효한 경우).
      */
     fun updateFcmToken(userId: Long, fcmToken: String?): Int
+
+    /**
+     * 회원탈퇴 익명화 (mypage T-B2). **row 를 지우지 않고** 개인정보만 지운다.
+     *
+     * row 를 남기는 이유는 상대의 챌린지·계약서·서명·결과가 FK 로 이 row 를 가리키기 때문이다.
+     * 지우면 **탈퇴하지 않은 사람의 기록까지 무너진다.**
+     *
+     * 갱신하는 컬럼은 정확히 이것들이다 (더도 덜도 아니다):
+     *
+     * | 컬럼 | 값 |
+     * |---|---|
+     * | `kakao_id` | `NULL` |
+     * | `nickname` | [anonymizedNickname] |
+     * | `profile_image_url` | `NULL` |
+     * | `phone_number` | `NULL` |
+     * | `phone_verified` | `false` |
+     * | `fcm_token` | `NULL` |
+     * | `refresh_token_hash` | `NULL` |
+     * | `refresh_token_issued_at` | `NULL` |
+     * | `status` | `'DELETED'` |
+     * | `updated_at` | [now] |
+     *
+     * `id` / `created_at` 은 건드리지 않는다.
+     *
+     * 🔴 **`nickname` 은 NOT NULL 을 유지한다.** 상대의 지난 챌린지 상세·보관함·홈 카드가 이
+     * 값을 non-null 로 받으므로, NULL 로 만들면 그 응답들이 전부 깨진다.
+     *
+     * ⚠️ **벌크 UPDATE 라 `@PreUpdate` 가 돌지 않는다** — 그래서 [now] 를 인자로 받아
+     * `updated_at` 을 직접 쓴다. [updateRefreshTokenHash] / [updateFcmToken] 이 같은 이유로
+     * `updated_at` 을 **안** 건드리는 것과 정확히 반대 지점이다: 그쪽은 기기 상태 갱신이라
+     * 사용자 프로필의 논리적 변경이 아니지만, 탈퇴는 **가장 논리적인 변경**이라 시각이 남아야 한다.
+     *
+     * @param now 익명화 시각 (KST 벽시계 — ADR-0010)
+     * @return 갱신된 row 수. 0 이면 해당 user 가 DB 에 없다는 뜻이다.
+     */
+    fun anonymizeForWithdrawal(userId: Long, anonymizedNickname: String, now: LocalDateTime): Int
 }

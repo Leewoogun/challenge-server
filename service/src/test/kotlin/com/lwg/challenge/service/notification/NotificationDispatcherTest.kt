@@ -270,6 +270,9 @@ private class RecordingNotificationRepository : NotificationRepository {
         store += saved
         return saved
     }
+
+    /** 탈퇴 전용 — 이 테스트가 다루는 경로가 아니다 (`WithdrawalServiceTest` 소관). */
+    override fun deleteAllByUserId(userId: Long): Int = 0
 }
 
 /** 발송 요청을 기록하는 stub. [result] 로 FCM 응답을, [throwOnSend] 로 발송기 자체의 사고를 재현한다. */

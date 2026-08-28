@@ -65,4 +65,15 @@ interface FriendshipRepository {
      * row 물리 삭제 — 요청 취소(cancelRequest)에서만 사용.
      */
     fun deleteById(id: Long)
+
+    /**
+     * [userId] 가 requester 이든 receiver 이든 관련 row 를 전부 **물리 삭제** (mypage T-B2).
+     *
+     * 🔴 친구 관계만 탈퇴에서 유일하게 지우는 대상이다. 챌린지·계약서·결과와 달리 friendships 는
+     * **두 사람의 현재 관계**일 뿐 지나간 사실의 기록이 아니다. 탈퇴한 사람이 남의 친구 목록에
+     * 계속 떠 있으면 그건 보존이 아니라 **오답**이다.
+     *
+     * @return 삭제된 row 수.
+     */
+    fun deleteAllByUserId(userId: Long): Int
 }

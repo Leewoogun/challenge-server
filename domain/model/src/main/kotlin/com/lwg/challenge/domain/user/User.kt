@@ -11,7 +11,14 @@ import java.time.LocalDateTime
  */
 data class User(
     val id: Long?,
-    val kakaoId: Long,
+    /**
+     * null = 카카오 연결이 없는 상태. 현재는 **탈퇴한 계정**만 해당한다 (mypage T-B2).
+     * 정상 계정은 항상 non-null 이다.
+     *
+     * 탈퇴가 이 값을 지우는 이유는 `V11__user_withdrawal.sql` 참조 — 남겨 두면 재로그인이
+     * 탈퇴 계정을 부활시킨다.
+     */
+    val kakaoId: Long?,
     val nickname: String,
     val profileImageUrl: String?,
     /** SHA-256(정규화된 번호) hex 문자열. null = 미등록(카카오 scope 동의 거부 등). */
