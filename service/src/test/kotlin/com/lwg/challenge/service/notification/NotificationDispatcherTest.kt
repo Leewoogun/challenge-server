@@ -271,6 +271,18 @@ private class RecordingNotificationRepository : NotificationRepository {
         return saved
     }
 
+    /** 목록 조회 전용 — 발송 경로가 수신함을 읽으면 그 자체가 버그다 (`NotificationQueryServiceTest` 소관). */
+    override fun findPageByUserId(userId: Long, cursor: Long?, limit: Int): List<Notification> =
+        error("발송 경로는 알림을 조회하지 않는다")
+
+    /** 뱃지 전용 — 발송 경로는 안 읽은 개수를 세지 않는다 (`NotificationQueryServiceTest` 소관). */
+    override fun countUnreadByUserId(userId: Long): Long =
+        error("발송 경로는 안 읽은 개수를 세지 않는다")
+
+    /** 읽음 처리 전용 — 발송 경로는 읽음을 건드리지 않는다 (`NotificationCommandServiceTest` 소관). */
+    override fun markAllAsReadByUserId(userId: Long): Int =
+        error("발송 경로는 읽음 처리를 하지 않는다")
+
     /** 탈퇴 전용 — 이 테스트가 다루는 경로가 아니다 (`WithdrawalServiceTest` 소관). */
     override fun deleteAllByUserId(userId: Long): Int = 0
 }

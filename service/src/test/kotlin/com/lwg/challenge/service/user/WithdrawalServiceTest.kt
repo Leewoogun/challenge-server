@@ -645,6 +645,18 @@ private class RecordingNotificationRepository : NotificationRepository {
     }
 
     override fun save(notification: Notification): Notification = error("탈퇴 경로는 알림을 저장하지 않는다")
+
+    /** 탈퇴 경로는 **지우기만** 한다 — 목록 조회는 `NotificationQueryServiceTest` 소관이다. */
+    override fun findPageByUserId(userId: Long, cursor: Long?, limit: Int): List<Notification> =
+        error("탈퇴 경로는 알림을 조회하지 않는다")
+
+    /** 탈퇴 경로는 뱃지를 세지 않는다 — 지워질 수신함의 안 읽은 개수는 의미가 없다. */
+    override fun countUnreadByUserId(userId: Long): Long =
+        error("탈퇴 경로는 안 읽은 개수를 세지 않는다")
+
+    /** 지울 행을 읽음으로 바꿀 이유가 없다 — 읽음 처리는 `NotificationCommandServiceTest` 소관이다. */
+    override fun markAllAsReadByUserId(userId: Long): Int =
+        error("탈퇴 경로는 읽음 처리를 하지 않는다")
 }
 
 private class RecordingPhotoStorage : PhotoStorage {
