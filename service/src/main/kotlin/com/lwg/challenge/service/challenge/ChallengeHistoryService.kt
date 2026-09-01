@@ -19,26 +19,41 @@ import java.time.YearMonth
  *
  * 사용자 확정(2026-08-28): **월 1칸씩 순차 이동, 빈 달도 건너뛰지 않는다. 첫 진입은 항상
  * 이번 달.** 그래서 이 서비스가 하는 일이 하나 늘었다 — 목록만이 아니라 **이동 경계**를
- * 함께 답한다 ([ChallengeHistoryPage.month] 에코 = 상한,
- * [ChallengeHistoryPage.firstArchivedMonth] = 하한).
+ * 함께 답한다 ([ChallengeHistoryPage.month] 에코 = 상한).
  *
- * ## 🔴 두 경계가 **모두 서버 값**이어야 하는 이유
+ * ## 🔴 2026-08-28 (2차) — **하한이 wire 에서 사라졌다. `<` 는 항상 활성이다**
  *
- * 앱이 상한("이번 달")을 **기기 시계**로 계산하면 서버가 준 하한과 **다른 시계에서 나온 두
- * 경계**가 된다. 이 프로젝트는 이미 `DeadlineType` 에서 *"기기 시계 조작·타임존 불일치를
- * 차단하고 마감 기준을 서버로 일원화"* 를 규약으로 박아 뒀다(`KstDeadlineCalculator` KDoc).
- * 같은 판단이다.
+ * 사용자 실기 확인 후 재확정: **기록이 없어도 과거로 갈 수 있고 빈 달 화면을 보여준다.**
+ * 계기는 실기에서 종료 기록이 전부 이번 달이라 **하한(최초 기록월) = 상한(이번 달)** 이 되어
+ * 양쪽 화살표가 동시에 죽었고, 카드는 보이는데 아무것도 안 움직여 **사용자가 "고장"으로 읽은
+ * 것**이다. 🔴 설계도 계약도 정확히 동작했지만 **그 정확함이 신규 사용자에게 고장으로 보였다.**
+ *
+ * 🔴 **서버 코드 변경이 0이다** — 이 서비스는 애초에 하한을 강제한 적이 없다. 거부하는 것은
+ * **미래 달 하나뿐**이고 과거는 어느 달이든 빈 목록으로 정상 응답해 왔다. 하한은 처음부터
+ * **앱이 [ChallengeHistoryPage.firstArchivedMonth] 로 스스로 걸던 규칙**이라, 그 규칙을 앱에서
+ * 걷어내는 것으로 개정이 끝난다.
+ *
+ * ⚠️ **1차 하한 논거는 폐기가 아니라 수단이 바뀌었다** — *"보관함은 '이게 네 기록 전부다'라고
+ * 주장하는 화면인데 하한이 없으면 그 주장을 할 수 없다."* 그 요구는 **차단이 아니라 주장할
+ * 수단**이었고, design 이 빈 달 부제(*"첫 기록은 YYYY년 M월이에요"*)로 **차단 → 고지**로 옮겼다.
+ * `firstArchivedMonth` 가 그 고지의 기준이 된다.
+ *
+ * ## 🔴 상한이 **서버 값**이어야 하는 이유
+ *
+ * 앱이 상한("이번 달")을 **기기 시계**로 계산하면 서버 값과 **다른 시계**에서 나온다. 이
+ * 프로젝트는 이미 `DeadlineType` 에서 *"기기 시계 조작·타임존 불일치를 차단하고 마감 기준을
+ * 서버로 일원화"* 를 규약으로 박아 뒀다(`KstDeadlineCalculator` KDoc). 같은 판단이다.
  *
  * 그래서 [getHistories] 의 `requestedMonth` 가 **nullable** 이다 — 앱의 첫 호출에는 월이 없고,
  * 그 응답의 에코가 곧 앱이 아는 "이번 달"이 된다. **앱은 시계를 아예 읽지 않는다.**
  *
- * ## 쿼리 3개 (1차의 2개에서 +1)
+ * ## 쿼리 3개
  *
- *  1. 하한 — `MIN(challenge_date)` (`findEarliestCompletedChallengeDate`)
+ *  1. `MIN(challenge_date)` — 빈 상태 2종 판별용 (`findEarliestCompletedChallengeDate`)
  *  2. 그 달의 challenges — `challenge_date DESC, id DESC`
  *  3. users 일괄 조회 (상대방 N 명 닉네임) — **그 달이 비면 걸지 않는다**
  *
- * 1번이 늘어난 만큼 2번이 전체가 아니라 한 달치로 줄었다. 카드에 인증 상태를 그리지 않아
+ * 카드에 인증 상태를 그리지 않아
  * verifications 를 조회하지 않는 것은 그대로다 — 판정 규칙상 결과 4개가 양측 인증 상태를
  * **유일하게 결정**하므로([ChallengeVerdict.decide]) 결과 하나가 인증 상태 두 개의 정보를
  * 전부 담는다.
@@ -68,8 +83,7 @@ class ChallengeHistoryService(
             throw SnackbarException("아직 오지 않은 달이에요")
         }
 
-        // 🔴 하한을 **절대값 그대로** 내린다. 불리언(`hasPrevious`)으로 접지 않는다 —
-        //    사유는 [ChallengeHistoryPage.firstArchivedMonth] KDoc.
+        // 🔴 **빈 상태 2종 판별 전용**이다. 하한이 아니다 — [ChallengeHistoryPage.firstArchivedMonth] KDoc.
         //    기록 0건이면 null 이고, 그 자체가 "보관함이 통째로 비었다" 의 신호다.
         val firstArchivedMonth: YearMonth? = challengeRepository
             .findEarliestCompletedChallengeDate(userId)
@@ -91,9 +105,9 @@ class ChallengeHistoryService(
 
     // ─── helpers ─────────────────────────────────────────────────
 
-    /** 1차와 **동일**하다 — 카드 7필드의 산출 규칙은 이번 개정에서 아무것도 바뀌지 않았다. */
+    /** 카드 7필드의 산출 규칙은 1차 이후 **아무것도 바뀌지 않았다.** */
     private fun toViews(userId: Long, challenges: List<Challenge>): List<ChallengeHistoryView> {
-        // 그 달이 비면 3번 쿼리를 아예 걸지 않는다 — 조회할 상대가 없다.
+        // 그 달이 비면 users 조회를 아예 걸지 않는다 — 조회할 상대가 없다.
         if (challenges.isEmpty()) return emptyList()
 
         val opponentIds: Set<Long> = challenges.map { c ->
@@ -163,8 +177,19 @@ data class ChallengeHistoryPage(
     /**
      * 이 사용자의 **가장 오래된 `COMPLETED` 기록의 월.** 종료 기록이 0건이면 **null**.
      *
-     * 🔴 **사용자 전역 값이라 요청한 달과 무관하게 매 응답 같은 값이다.** 앱은
-     * `canPrev = month > firstArchivedMonth` 로 `<` 활성 여부를 **왕복 없이** 계산한다.
+     * 🔴 **용도는 빈 상태 2종 판별 하나뿐이다** — `null` 이면 *"보관함이 통째로 비었다"*(기록 전무
+     * 화면 + *"챌린지 만들기"* CTA), non-null 이면 *"이 달만 비었다"*(빈 달 화면, CTA 없음).
+     * `histories: []` 만으로는 그 둘이 안 갈리고 **다른 출처가 없다.**
+     *
+     * ## 🔴 이 값으로 `<` 를 막지 마라 (2026-08-28 2차 개정)
+     *
+     * v3 까지는 이게 **하한**이었다. 사용자가 그 규칙을 폐기했다 — 실기에서 기록이 전부 이번
+     * 달이라 **하한 = 상한 = 이번 달**이 되어 양쪽 화살표가 동시에 죽었고 **"고장"으로 읽혔다.**
+     * 🔴 **이제 하한 자체가 없다 — `<` 는 항상 활성이다.**
+     *
+     * ⚠️ **월 값이 그대로 남아 있어 다시 하한으로 쓰기 쉽다 — 그게 방금 폐기한 규칙이다.**
+     * 필드를 지우지 않는 이유는 위 판별 용도가 살아 있고 대체 출처가 없기 때문이지,
+     * 경계로 쓰라는 뜻이 아니다.
      *
      * ## 🔴 왜 `hasPrevious: Boolean` 이 아닌가 — 불리언은 연타에서 경계를 못 지킨다
      *

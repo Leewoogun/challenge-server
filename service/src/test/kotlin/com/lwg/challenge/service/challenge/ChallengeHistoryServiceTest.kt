@@ -204,7 +204,7 @@ class ChallengeHistoryServiceTest {
         assertEquals(YearMonth.of(2026, 3), service.getHistories(me, YearMonth.of(2026, 3)).month)
     }
 
-    // ─── 4. 과거 하한 — firstArchivedMonth (절대값) ──────────────
+    // ─── 4. firstArchivedMonth — 빈 상태 2종 판별 (경계 아님) ────
 
     /**
      * 🔴 하한은 **절대값**이고 **요청한 달과 무관하게 매 응답 같은 값**이다. 이게 이 필드의

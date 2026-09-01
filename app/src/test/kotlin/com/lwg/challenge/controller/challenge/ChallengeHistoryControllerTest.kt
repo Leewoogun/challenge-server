@@ -161,6 +161,24 @@ class ChallengeHistoryControllerTest {
     }
 
     /**
+     * 🔴 **2차 개정 회귀 방지 — 응답에 하한 필드가 없다.**
+     *
+     * 과거 끝이 사라졌으므로 `joinedMonth` 류의 경계 필드가 wire 에 들어오면 안 된다.
+     * 들어오는 순간 앱이 다시 `<` 를 막을 근거가 생긴다 — 지금 폐기한 그 규칙이다.
+     */
+    @Test
+    fun `getHistories - 응답에 하한 경계 필드가 없다`() {
+        stubDefaultMonth(page())
+
+        val body = mockMvc.perform(get("/api/v1/challenges/history"))
+            .andExpect(status().isOk)
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(!body.contains("joinedMonth"), "하한 필드가 되살아났다: $body")
+        assertTrue(!body.contains("hasPrevious"), body)
+    }
+
+    /**
      * 🔴 **기록 0건이면 `firstArchivedMonth` 가 `null` 이고, 키는 그대로 실린다.**
      *
      * 이 프로젝트 Jackson 에 `@JsonInclude(NON_NULL)` 이 없다는 사실에 앱이 기대고 있다 —
@@ -184,7 +202,7 @@ class ChallengeHistoryControllerTest {
     @Test
     fun `getHistories - month 파라미터가 서비스에 그대로 전달된다`() {
         Mockito.`when`(challengeHistoryService.getHistories(meId, YearMonth.of(2026, 3)))
-            .thenReturn(page(month = YearMonth.of(2026, 3), firstArchivedMonth = YearMonth.of(2026, 3)))
+            .thenReturn(page(month = YearMonth.of(2026, 3)))
 
         mockMvc.perform(get("/api/v1/challenges/history").param("month", "2026-03"))
             .andExpect(status().isOk)
@@ -245,7 +263,7 @@ class ChallengeHistoryControllerTest {
      * **화살표를 그릴 근거를 잃고**, 이 달만 빈 것인지 보관함이 통째로 빈 것인지도 구분 못 한다.
      */
     @Test
-    fun `getHistories - 빈 달도 하한 신호와 함께 정상 응답한다`() {
+    fun `getHistories - 빈 달도 경계 신호와 함께 정상 응답한다`() {
         stubDefaultMonth(page(firstArchivedMonth = YearMonth.of(2026, 3), histories = emptyList()))
 
         mockMvc.perform(get("/api/v1/challenges/history"))

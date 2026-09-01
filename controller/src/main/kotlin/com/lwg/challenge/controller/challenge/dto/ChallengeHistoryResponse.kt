@@ -39,24 +39,33 @@ data class ChallengeHistoryMonthData(
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_MONTH)
     val month: YearMonth,
 
+
     /**
      * 이 사용자의 **가장 오래된 `COMPLETED` 기록의 월.** 🔴 **nullable** — 종료 기록 0건이면 null.
      *
-     * 🔴 **사용자 전역 값이라 요청한 달과 무관하게 매 응답 같은 값이다.**
-     * 앱은 `canPrev = month > firstArchivedMonth` 로 `<` 활성 여부를 **왕복 없이** 계산하고,
-     * `null` 로 *"보관함이 통째로 비었다"*(→ 빈 달 화면이 아니라 기록 전무 화면)를 판정한다.
+     * 🔴 **용도는 빈 상태 2종 판별 하나뿐이다** — `null` 이면 *"보관함이 통째로 비었다"*(기록 전무
+     * 화면 + *"챌린지 만들기"* CTA), non-null 이면 *"이 달만 비었다"*(빈 달 화면, CTA 없음).
+     * `histories: []` 만으로는 그 둘이 안 갈리고 **다른 출처가 없다.** 사용자 전역 값이다.
      *
-     * 불리언(`hasPrevious`)이 아닌 이유는
-     * `ChallengeHistoryPage.firstArchivedMonth` KDoc — 요약하면 **연타 중에는 상대값이 한 탭
-     * 늦게 도착해 사용자가 경계를 넘어간 뒤에 경계를 통보받는다.**
+     * ## 🔴 이 값으로 `<` 를 막지 마라 (2026-08-28 2차 개정)
+     *
+     * v3 까지는 이게 **하한**이었다. 사용자가 그 규칙을 폐기했다 — 기록이 전부 이번 달이면
+     * **하한 = 상한**이 되어 양쪽 화살표가 죽고 **"고장"으로 읽힌다.**
+     * 🔴 **이제 하한 자체가 없다 — `<` 는 항상 활성이고 과거는 어느 달이든 빈 달로 열린다.**
+     *
+     * ⚠️ 월 값이 그대로 남아 있어 **다시 하한으로 쓰기 쉽다 — 그게 방금 폐기한 규칙이다.**
+     * 필드를 지우지 않는 건 위 판별 용도가 살아 있고 대체 출처가 없어서지 경계로 쓰라는 뜻이 아니다.
+     * design 은 이 값을 빈 달 부제(*"첫 기록은 YYYY년 M월이에요"*)의 기준으로 쓴다 —
+     * **차단이 아니라 고지**이며, 그게 1차 하한 논거가 요구한 *"주장할 수단"* 이다.
      *
      * ⚠️ 이 프로젝트 Jackson 에는 `@JsonInclude(NON_NULL)` 이 없어 **null 이어도 키는 항상
      * 실린다**(`WireShapeContractTest` KDoc 실측). 모바일이 키 존재를 전제해도 된다.
      */
     @field:Schema(
-        example = "2026-03",
+        example = "2026-08",
         nullable = true,
-        description = "가장 오래된 COMPLETED 기록의 월(`yyyy-MM`). 종료 기록이 없으면 null",
+        description = "가장 오래된 COMPLETED 기록의 월(`yyyy-MM`). 종료 기록이 없으면 null. " +
+            "**빈 상태 2종 판별 전용** — 경계로 쓰지 않는다",
     )
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_MONTH)
     val firstArchivedMonth: YearMonth?,
