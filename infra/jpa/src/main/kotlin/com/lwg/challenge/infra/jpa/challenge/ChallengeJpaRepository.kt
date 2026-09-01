@@ -184,6 +184,25 @@ interface ChallengeJpaRepository : JpaRepository<ChallengeEntity, Long> {
      * 마감 정각(`deadline = now`)은 아직 유효하므로 `>=` 가 아니라 `>` 를 쓴다
      * (`KstDeadlineCalculator.isExpired` 의 경계 규칙과 일치).
      *
+     * ## 🔴 이 WHERE 절은 [findPendingReceivedIdsIn] 과 **같아야 한다**
+     *
+     * 저쪽은 같은 도메인 규칙(*"이 사용자가 아직 응답을 기다리는 신청"*)의 **두 번째 구현**이다 —
+     * 여기는 홈 '받은 도전장' 목록으로, 저기는 알림의 `referencePending` 건별 불리언으로 답할 뿐
+     * 묻는 질문이 같다. **이 세 조건 중 하나라도 고칠 일이 생기면 저쪽도 같이 고쳐라.**
+     *
+     * 어긋나면 나는 증상: *"알림은 탭되는데 홈 '받은 도전장'엔 그 카드가 없다"* 또는 그 반대.
+     * 🔴 **조용히 틀린다** — 두 쿼리 다 성공하고 응답도 200 이라 예외도 로그도 남지 않는다.
+     *
+     * ⚠️ 특히 **`deadline > :now` 를 빼지 마라.** 위의 lazy expiry 때문에 마감이 지난 row 도
+     * `status = 'PENDING'` 인 채로 정상적으로 존재한다 — 조건을 빼면 **만료된 신청이 "대기 중"으로
+     * 나간다.** 그건 `referencePending` 이 애초에 고치려던 버그의 재발이다.
+     *
+     * **하나로 합치지 않은 이유**: 이쪽은 native 고 저쪽은 JPQL 이라 컬럼 표기부터 다르고
+     * (`c.opponent_id` vs `c.opponentId`), SELECT 절·JOIN·정렬도 다르다. 합치려면 둘 중 하나를
+     * 상대 쪽 형태로 끌고 와야 하는데 그 편이 더 위험하다. 대신
+     * **`ChallengeReceivedPredicateBindingTest` 가 두 쿼리 문자열을 묶어 놓는다** — 한쪽에서
+     * 조건이 빠지면 그 테스트가 깨진다.
+     *
      * native query 인 이유: ChallengeEntity ↔ UserEntity association 매핑이 없어 JPQL join 을 쓸 수 없다.
      * (FriendshipJpaRepository 의 목록 쿼리들과 동일한 사유·스타일.)
      *
@@ -216,6 +235,58 @@ interface ChallengeJpaRepository : JpaRepository<ChallengeEntity, Long> {
         @Param("me") me: Long,
         @Param("now") now: LocalDateTime,
     ): List<Array<Any?>>
+
+    /**
+     * [findReceivedPending] 의 **건별 판정판** — 주어진 id 중 이 사용자가 응답 대기 중인 것의 id 만.
+     *
+     * `opponent_id = :opponentId AND id IN :ids AND status = 'PENDING' AND deadline > :now`.
+     * 알림 목록이 `referencePending` 을 채울 때 페이지당 **1회** 부른다.
+     *
+     * ## 🔴 WHERE 절 3개가 [findReceivedPending] 과 **같아야 한다 — 그게 요구사항이다**
+     *
+     * 이건 같은 도메인 규칙(*"이 사용자가 아직 응답을 기다리는 신청"*)의 **두 번째 구현**이다.
+     * 홈의 '받은 도전장'과 알림의 *"아직 응답 대기인가"* 는 **같은 질문**이라, 조건이 갈라지는 순간
+     * 두 화면이 서로 다른 답을 낸다. 한쪽 WHERE 를 고칠 일이 생기면 다른 쪽도 같이 고쳐라.
+     *
+     * 어긋나면 나는 증상: *"알림은 탭되는데 홈 '받은 도전장'엔 그 카드가 없다"* 또는 그 반대.
+     * 🔴 **조용히 틀린다** — 두 쿼리 다 성공하고 응답도 200 이라 예외도 로그도 남지 않는다.
+     *
+     * **하나로 합치지 않은 이유**: 저쪽은 native 고 이쪽은 JPQL 이라 컬럼 표기부터 다르고
+     * (`c.opponent_id` vs `c.opponentId`), SELECT 절·JOIN·정렬도 다르다 (저쪽은 users JOIN 한
+     * 목록, 이쪽은 id 만). 조건이 겹칠 뿐 쿼리는 같은 것이 아니다. 대신
+     * **`ChallengeReceivedPredicateBindingTest` 가 두 쿼리 문자열을 묶어 놓는다** — 한쪽에서
+     * 조건이 빠지면 그 테스트가 깨진다.
+     *
+     * ## 🔴 `deadline > :now` 가 빠지면 조용히 틀린다
+     *
+     * 마감이 지나도 DB 의 status 는 `PENDING` 그대로다 (lazy expiry — [findReceivedPending]).
+     * 즉 **`status = 'PENDING'` 만으로는 만료된 신청까지 «대기 중» 으로 집는다.** 쿼리는 성공하고
+     * 행도 나오므로 로그에 아무것도 안 남는다. 경계가 `>=` 가 아니라 `>` 인 것도 저쪽과 같다
+     * (마감 정각은 아직 유효 — `KstDeadlineCalculator.isExpired`).
+     *
+     * `status` 를 리터럴로 박은 것은 [findRecentlyCompletedByUser] 와 같은 판단이다 — 이 조회는
+     * `PENDING` 만 의미가 있고, 파라미터로 열어 두면 다른 값이 흘러들어 **조용히 빈 결과**가 된다.
+     *
+     * JPQL 인 이유: users JOIN 이 필요 없다. 여기서 필요한 것은 **id 뿐**이라 엔티티를 물어 올
+     * 이유도 없다 (`SELECT c.id`).
+     *
+     * IN 절 빈 컬렉션 가드는 [findActiveByUser]·[findDueByStatus] 와 같은 이유로 호출부에 있다.
+     */
+    @Query(
+        """
+        SELECT c.id
+          FROM ChallengeEntity c
+         WHERE c.opponentId = :opponentId
+           AND c.id IN (:ids)
+           AND c.status = 'PENDING'
+           AND c.deadline > :now
+        """,
+    )
+    fun findPendingReceivedIdsIn(
+        @Param("opponentId") opponentId: Long,
+        @Param("ids") ids: Collection<Long>,
+        @Param("now") now: LocalDateTime,
+    ): List<Long>
 
     /**
      * 탈퇴자가 **보낸** `PENDING` 챌린지를 물리 삭제 (mypage T-B4 — 회원탈퇴).

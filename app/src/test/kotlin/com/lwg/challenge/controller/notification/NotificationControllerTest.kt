@@ -47,8 +47,10 @@ import java.time.LocalDateTime
  *    *"목록을 열면 전부 읽음"* 이라 행별 값의 정보량이 0이기 때문이고, `title` 은 카드가
  *    `body` 단독 1행이라 화면이 그리지 않기 때문이다. ⚠️ 둘 다 **DB 컬럼은 그대로 있다** —
  *    없는 것은 wire 뿐이다.
- * 3. 🔴 **null 이어도 키는 남는다** (`nextCursor` / `referenceId`) — 이 프로젝트 Jackson 에
- *    `@JsonInclude(NON_NULL)` 이 없다는 사실에 모바일이 기대고 있다.
+ * 3. 🔴 **null 이어도 키는 남는다** (`nextCursor` / `referenceId` / `referencePending`) — 이 프로젝트
+ *    Jackson 에 `@JsonInclude(NON_NULL)` 이 없다는 사실에 모바일이 기대고 있다. `referencePending` 은
+ *    특히 그렇다 — `null` 이 **«이 필드를 보지 마라»** 라는 세 번째 상태라, 키가 사라지면 앱이 그
+ *    상태를 표현할 방법 자체를 잃는다.
  * 4. 🔴 **파라미터 오류는 HTTP 500 이 아니라 200 + code=700** 이다.
  * 5. 🔴 **뱃지 축과 목록 축의 DTO 가 섞이지 않는다** — 읽음 엔드포인트 응답에 `notifications` 가
  *    없고, 목록 응답에 `unreadCount` 가 없다. 섞이면 앱이 뱃지 갱신 경로를 두 벌 갖는다.
@@ -82,12 +84,15 @@ class NotificationControllerTest {
         type: String = "CHALLENGE_ACCEPTED",
         body: String = "민수님이 수락했습니다",
         referenceId: Long? = 1001L,
+        // 기본 타입이 `CHALLENGE_ACCEPTED` 라 기본값도 null 이다 — 이 타입엔 개념이 없다.
+        referencePending: Boolean? = null,
         createdAt: LocalDateTime = LocalDateTime.of(2026, 9, 1, 13, 42, 7),
     ) = NotificationView(
         notificationId = notificationId,
         type = type,
         body = body,
         referenceId = referenceId,
+        referencePending = referencePending,
         createdAt = createdAt,
     )
 
@@ -175,6 +180,75 @@ class NotificationControllerTest {
         assertTrue(
             body.contains(""""nextCursor":null"""),
             "null 이어도 키가 사라지면 안 된다 (앱이 키 존재를 전제한다): $body",
+        )
+    }
+
+    /**
+     * 🔴 **`referencePending` 값이 그대로 실린다 — `true` 도 `false` 도.**
+     *
+     * 컨트롤러가 3값 중 하나라도 접으면(`?: false` 같은 것) 여기서 깨진다. 산출은 서비스 몫이고
+     * (`NotificationQueryServiceTest`), 여기서 보는 것은 **wire 로 나가는 모양** 하나다.
+     */
+    @Test
+    fun `getNotifications - referencePending 이 true 와 false 로 그대로 실린다`() {
+        stubDefault(
+            NotificationPage(
+                notifications = listOf(
+                    view(
+                        notificationId = 57L,
+                        type = "CHALLENGE_REQUEST",
+                        body = "민수님이 도전장을 보냈습니다",
+                        referenceId = 1001L,
+                        referencePending = true,
+                    ),
+                    view(
+                        notificationId = 56L,
+                        type = "CHALLENGE_REQUEST",
+                        body = "영희님이 도전장을 보냈습니다",
+                        referenceId = 1002L,
+                        referencePending = false,
+                    ),
+                ),
+                nextCursor = null,
+            ),
+        )
+
+        val body = mockMvc.perform(get("/api/v1/notifications"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.notifications[0].referencePending").value(true))
+            .andExpect(jsonPath("$.data.notifications[1].referencePending").value(false))
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(body.contains(""""referencePending":true"""), "true 가 그대로 나가야 한다: $body")
+        assertTrue(body.contains(""""referencePending":false"""), "false 가 그대로 나가야 한다: $body")
+    }
+
+    /**
+     * 🔴 **`referencePending` 이 null 이어도 키는 실려 나간다** — `doesNotExist()` 가 아니다.
+     *
+     * `nextCursor` / `referenceId` 와 같은 사정이다 (이 프로젝트 Jackson 에 `@JsonInclude(NON_NULL)`
+     * 이 없다). 여기서는 이유가 하나 더 있다 — `null` 은 «비탭» 이 아니라 **«이 필드를 보지 마라»**
+     * 라서, 키가 통째로 사라지면 앱이 그 세 번째 상태를 표현할 방법을 잃는다. 그러면 남는 선택지는
+     * *"없으면 비탭"* 또는 *"없으면 탭 가능"* 뿐이고 **둘 다 틀린다** (`NotificationDto` KDoc).
+     */
+    @Test
+    fun `getNotifications - referencePending 이 null 이어도 키가 존재한다`() {
+        stubDefault(
+            NotificationPage(
+                notifications = listOf(view(type = "OPPONENT_VERIFIED", referencePending = null)),
+                nextCursor = null,
+            ),
+        )
+
+        val body = mockMvc.perform(get("/api/v1/notifications"))
+            .andExpect(status().isOk)
+            // 🔴 doesNotExist() 가 아니다 — 키는 있고 값이 null 이다.
+            .andExpect(jsonPath("$.data.notifications[0].referencePending").value(nullValue()))
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(
+            body.contains(""""referencePending":null"""),
+            "null 이어도 키가 사라지면 앱이 «이 필드를 보지 마라» 를 표현할 수 없다: $body",
         )
     }
 

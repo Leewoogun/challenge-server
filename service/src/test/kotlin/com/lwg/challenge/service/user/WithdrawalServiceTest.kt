@@ -612,6 +612,13 @@ private class RecordingChallengeRepository : ChallengeRepository {
     override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> =
         emptyList()
 
+    /** 알림 목록의 `referencePending` 전용 — 탈퇴 경로는 부르지 않는다. */
+    override fun findPendingReceivedIdsIn(
+        opponentId: Long,
+        ids: Collection<Long>,
+        now: LocalDateTime,
+    ): Set<Long> = error("탈퇴 경로는 응답 대기 판정을 하지 않는다")
+
     override fun findConflicting(
         userA: Long,
         userB: Long,

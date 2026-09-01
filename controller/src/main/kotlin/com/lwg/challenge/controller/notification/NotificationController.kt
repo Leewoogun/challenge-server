@@ -84,6 +84,9 @@ class NotificationController(
             "정렬 축이 `created_at` 이 아니라 `id` 인 것은 시계 역행 시 행이 조용히 건너뛰어지는 것을 " +
             "막기 위한 결정이다. " +
             "`type` 은 **열린 집합**이라 앱이 모르는 값이 올 수 있다 — typed enum 으로 만들지 마라. " +
+            "🔴 `referencePending` 은 **3값**이다 — `true`(대상이 응답 대기) / `false`(처리·만료·삭제) / " +
+            "`null`(**이 타입엔 개념이 없으니 이 필드를 보지 마라**). 탭 여부의 기본 규칙은 `type` 이 정하고 " +
+            "이 값은 «조건부» 인 타입에서만 추가로 요구되는 조건이다. `type=CHALLENGE_REQUEST` 면 **non-null 보장**. " +
             "알림이 없으면 `notifications: []` 로 정상 응답한다.",
     )
     @SecurityRequirement(name = "bearerAuth")
@@ -225,6 +228,9 @@ class NotificationController(
         // DB 의 title 컬럼은 그대로다. 화면이 그리지 않을 뿐이다.
         body = body,
         referenceId = referenceId,
+        // 🔴 3값을 그대로 흘린다 — null 을 false 로 접지 마라 (NotificationDto KDoc: null 은
+        //    «비탭» 이 아니라 «이 필드를 보지 마라» 다).
+        referencePending = referencePending,
         // createdAt 은 이미 KST LocalDateTime (ADR-0010) — @JsonFormat 이 wire 형식을 정한다.
         createdAt = createdAt,
     )

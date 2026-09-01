@@ -949,6 +949,13 @@ private class FakeChallengeRepository : ChallengeRepository {
                 )
             }
 
+    /** 알림 목록의 `referencePending` 전용 — 신청/수락/거절 경로는 부르지 않는다. */
+    override fun findPendingReceivedIdsIn(
+        opponentId: Long,
+        ids: Collection<Long>,
+        now: LocalDateTime,
+    ): Set<Long> = error("커맨드 경로는 알림용 응답 대기 판정을 하지 않는다")
+
     override fun findConflicting(
         userA: Long,
         userB: Long,

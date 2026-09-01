@@ -117,6 +117,41 @@ interface ChallengeRepository {
     fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge>
 
     /**
+     * [ids] 중 [opponentId] 가 **아직 응답을 기다리고 있는** 챌린지의 id 집합.
+     *
+     * `opponent_id = :opponentId AND id IN :ids AND status = PENDING AND deadline > :now`.
+     * 알림 목록의 `referencePending` 산출에 쓴다 — 한 페이지의 `CHALLENGE_REQUEST` 참조 id 를
+     * 모아 **한 번에** 묻는다 (`NotificationQueryService` KDoc).
+     *
+     * ## 🔴 조건 3개가 [findReceivedPending] 과 **같아야 한다**
+     *
+     * 두 조회는 *"이 사람이 지금 응답할 수 있는 신청"* 이라는 **같은 술어**를 서로 다른 화면에서
+     * 묻는다 — 홈은 목록으로, 알림은 건별 불리언으로. 조건이 갈라지면 그 즉시 두 화면이 서로 다른
+     * 말을 한다: 알림에서는 눌리는데 홈에는 그 카드가 없거나, 반대로 홈에는 있는데 알림이 죽어 있다.
+     * **한쪽을 고칠 때 반드시 다른 쪽도 본다.**
+     *
+     * ## 🔴 `deadline > :now` 를 빼면 만료된 신청이 «대기 중» 으로 나간다
+     *
+     * 마감이 지난 row 는 DB 에서 **`PENDING` 인 채로 남는다** — `EXPIRED` 로 전이시키는 것은
+     * 배치이고, 그 전까지 응답에서만 빠진다 (lazy expiry — [findReceivedPending] KDoc).
+     * 그래서 `status = PENDING` 만으로는 **정상적으로 존재하는 만료 row 를 전부 `true` 로
+     * 내려보낸다.** 앱은 탭을 허용하고, 사용자는 **홈의 받은 도전장이 비어 있는 화면**에 도착한다
+     * — 이 필드가 애초에 막으려던 바로 그 증상이다.
+     *
+     * ## 삭제된 챌린지는 분기 없이 `false` 가 된다
+     *
+     * 챌린저가 `PENDING` 을 취소하면 row 가 **물리 삭제**된다 ([deleteById]). 지워진 id 는 결과
+     * 집합에 들어올 수 없으므로 호출부의 `id in 집합` 판정이 그대로 `false` 다 —
+     * *"삭제됐는가"* 를 따로 묻는 조회가 필요 없다.
+     *
+     * @param ids 조회할 챌린지 id. **빈 컬렉션이면 호출 자체를 하지 마라** —
+     *   `IN` 절 빈 컬렉션 가드는 [findActiveByUser]·[findDueByStatus] 와 같이 호출부 책임이다.
+     * @param now 마감 비교 기준 시각. **KST LocalDateTime** — `challenges.deadline` 과 같은 축이어야 한다 (ADR-0010).
+     * @return [ids] 의 **부분집합**. 하나도 안 걸리면 빈 집합이다.
+     */
+    fun findPendingReceivedIdsIn(opponentId: Long, ids: Collection<Long>, now: LocalDateTime): Set<Long>
+
+    /**
      * 두 사용자 사이의 **같은 날짜** 중복 챌린지를 양방향으로 조회한다.
      *
      * `((challenger=a AND opponent=b) OR (challenger=b AND opponent=a)) AND challenge_date=? AND status IN ?`

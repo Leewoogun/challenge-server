@@ -68,6 +68,16 @@ class ChallengeRepositoryImpl(
         }
     }
 
+    /** 빈 컬렉션 가드는 `findActiveByUser`/`findDueByStatus` 와 같은 자리다 — IN 절에 빈 값을 넘기지 않는다. */
+    override fun findPendingReceivedIdsIn(
+        opponentId: Long,
+        ids: Collection<Long>,
+        now: LocalDateTime,
+    ): Set<Long> {
+        if (ids.isEmpty()) return emptySet()
+        return jpa.findPendingReceivedIdsIn(opponentId, ids, now).toSet()
+    }
+
     override fun findConflicting(
         userA: Long,
         userB: Long,

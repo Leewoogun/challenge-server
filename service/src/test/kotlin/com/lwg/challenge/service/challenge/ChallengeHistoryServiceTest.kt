@@ -543,6 +543,13 @@ class ChallengeHistoryServiceTest {
 
         override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> = emptyList()
 
+        /** 알림 목록의 `referencePending` 전용 — 보관함 경로는 부르지 않는다. */
+        override fun findPendingReceivedIdsIn(
+            opponentId: Long,
+            ids: Collection<Long>,
+            now: LocalDateTime,
+        ): Set<Long> = error("보관함 서비스가 알림용 응답 대기 판정을 시도했다")
+
         override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> =
             emptyList()
 

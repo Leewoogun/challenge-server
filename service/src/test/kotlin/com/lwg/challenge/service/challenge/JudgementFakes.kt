@@ -89,6 +89,13 @@ internal class FakeChallenges : ChallengeRepository {
 
     override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> = emptyList()
 
+    /** 알림 목록의 `referencePending` 전용 — 배치 판정 경로는 부르지 않는다. */
+    override fun findPendingReceivedIdsIn(
+        opponentId: Long,
+        ids: Collection<Long>,
+        now: LocalDateTime,
+    ): Set<Long> = error("판정 배치가 알림용 응답 대기 판정을 시도했다")
+
     override fun findConflicting(
         userA: Long,
         userB: Long,

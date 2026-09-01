@@ -141,6 +141,47 @@ data class NotificationDto(
      */
     @field:Schema(example = "1001", nullable = true)
     val referenceId: Long?,
+    /**
+     * *"이 알림이 가리키는 대상이 아직 응답을 기다리는가."*
+     *
+     * | 값 | 뜻 |
+     * |---|---|
+     * | `true` | 대상이 **아직 응답 대기 중**이다 |
+     * | `false` | 이미 처리·만료·종료됐다 **또는 삭제됐다** |
+     * | `null` | 이 타입에는 그 개념이 **없다** |
+     *
+     * ## 🔴 `null` 은 «탭 가능» 도 «비탭» 도 아니다 — **«이 필드를 보지 마라»** 다
+     *
+     * 이건 **결정자가 아니라 추가 조건**이다. 탭 여부의 기본 규칙은 **[type] 이 정하고**, 그중
+     * *"조건부"* 인 타입에서만 이 값을 **추가로** 요구한다. 3값을 불리언으로 접어 읽으면 양쪽 다
+     * 틀린다 — `null` 을 비탭으로 읽으면 **증거 도착(`OPPONENT_VERIFIED`)이 안 눌리고**, 탭 가능으로
+     * 읽으면 **수락·거절(`CHALLENGE_ACCEPTED`/`CHALLENGE_REJECTED`)이 눌린다.**
+     *
+     * ## 🔴 `type == CHALLENGE_REQUEST` 면 **non-null 보장**
+     *
+     * 서버가 고정하는 계약이다 (`NotificationQueryServiceTest`). 즉 신청 알림에서는 이 값이
+     * 반드시 있고, 앱은 *"없으면 일단 허용"* 같은 fallback 을 둘 필요가 없다. 산출 술어는 홈의
+     * '받은 도전장' 목록과 **같다** — `opponent = 수신자 AND PENDING AND 마감 전`. 그래서 `true` 인
+     * 알림을 탭하면 홈에 그 카드가 **반드시 있다.**
+     *
+     * ⚠️ **null 이어도 키는 실려 나간다** ([NotificationListData] KDoc 과 같은 사정 —
+     * `@JsonInclude(NON_NULL)` 미설정).
+     *
+     * ## 🔴 이름이 `tappable` / `actionable` 이 아닌 이유
+     *
+     * *"탭 가능한가"* 는 **화면 판단**이다 — 같은 데이터를 두고도 화면이 딥링크를 어디로 보내느냐에
+     * 따라 답이 달라지므로 서버가 알 일이 아니다. 서버가 아는 것은 *"대상 row 가 아직 대기 상태인가"*
+     * 하나뿐이고 이름은 딱 그만큼만 주장한다. `reference*` 접두는 [referenceId] 와 **짝**이고,
+     * 그 필드의 **참조 대상 중립성을 승계**한다 — `FRIEND_REQUEST` 가 `users.id` 를 가리키게 돼도
+     * *"참조 대상이 응답 대기 중인가"* 는 그대로 말이 된다 (V8 컬럼 주석의 판단과 같다).
+     */
+    @field:Schema(
+        example = "true",
+        nullable = true,
+        description = "참조 대상이 아직 응답 대기 중인지. true=대기 / false=처리·만료·삭제 / " +
+            "null=이 타입엔 개념 없음(«이 필드를 보지 마라»). type=CHALLENGE_REQUEST 면 non-null 보장.",
+    )
+    val referencePending: Boolean?,
     /** KST 기준 (예: `"2026-09-01 13:42:07"`). 모바일에서 상대 시간 변환. ADR-0010. */
     @field:Schema(example = "2026-09-01 13:42:07", description = "KST 기준 yyyy-MM-dd HH:mm:ss")
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)

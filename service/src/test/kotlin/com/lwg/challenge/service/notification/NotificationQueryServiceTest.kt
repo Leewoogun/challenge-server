@@ -1,12 +1,20 @@
 package com.lwg.challenge.service.notification
 
+import com.lwg.challenge.core.time.KstTime
+import com.lwg.challenge.domain.challenge.Challenge
+import com.lwg.challenge.domain.challenge.ChallengeRepository
+import com.lwg.challenge.domain.challenge.ChallengeStatus
+import com.lwg.challenge.domain.challenge.ReceivedChallenge
 import com.lwg.challenge.domain.notification.Notification
 import com.lwg.challenge.domain.notification.NotificationRepository
 import com.lwg.challenge.domain.notification.NotificationType
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.time.Clock
+import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
@@ -24,6 +32,7 @@ import java.time.LocalDateTime
  * 6. **`type` 이 enum 이 아니라 String** 으로 매핑된다 (열린 집합 결정 — `NotificationDto` KDoc).
  * 7. **`getUnreadCount`** — 저장소가 센 값을 그대로 `Int` 로 돌려주고, 읽은 행·남의 행은 세지 않는다.
  *    (상태를 **바꾸는** 쪽은 여기가 아니라 [NotificationCommandServiceTest] 다.)
+ * 8. 🔴 **`referencePending` 3값 산출 + 배치 조회의 호출 규약** — 아래 §5.
  *
  * ⚠️ **저장소를 흉내낸 것은 `id DESC` 정렬 · `id < cursor` 필터 · `limit` 까지다.** 실제 JPQL 이
  * 같은 규칙으로 자르는지는 여기서 알 수 없다 — fake 가 같은 규칙을 다시 구현할 뿐이다.
@@ -37,8 +46,17 @@ class NotificationQueryServiceTest {
     private val me = 1L
     private val other = 2L
 
+    /** 서버 "지금" = 2026-09-01 13:00 KST. 만료 경계가 이 시각을 기준으로 갈린다. */
+    private val now = LocalDateTime.of(2026, 9, 1, 13, 0)
+
     private val notifications = FakeNotificationStore()
-    private val service = NotificationQueryService(notificationRepository = notifications)
+    private val challenges = RecordingChallengeStore()
+    private val service = NotificationQueryService(
+        notificationRepository = notifications,
+        challengeRepository = challenges,
+        // 🔴 고정 시계 — `deadline > now` 경계를 결정적으로 재현하기 위해서다 (ADR-0010).
+        clock = Clock.fixed(now.atZone(KstTime.ZONE).toInstant(), KstTime.ZONE),
+    )
 
     // ─── 1. 건수별 동작 ──────────────────────────────────────────
 
@@ -248,7 +266,208 @@ class NotificationQueryServiceTest {
         assertEquals(1, service.getUnreadCount(me))
     }
 
+    // ─── 5. referencePending (신청 알림의 대상이 아직 살아 있는가) ──
+
+    /**
+     * 🔴 **대상이 응답 대기 중이면 `true`.**
+     *
+     * 술어는 홈 '받은 도전장'과 같다 — `opponent = 수신자 AND PENDING AND deadline > now`.
+     * 여기가 `true` 인 알림을 탭하면 홈에 그 카드가 **반드시 있다.**
+     */
+    @Test
+    fun `CHALLENGE_REQUEST 는 대상이 응답 대기 중이면 referencePending 이 true 다`() {
+        challenges.put(challenge(id = 1001L, opponentId = me, deadline = now.plusHours(5)))
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
+
+        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+
+        assertEquals(true, view.referencePending)
+    }
+
+    /** 처리됐거나(수락/거절) 삭제된 챌린지는 집합에 없다 — 별도 분기 없이 `false` 다. */
+    @Test
+    fun `CHALLENGE_REQUEST 는 대상이 집합에 없으면 referencePending 이 false 다`() {
+        // 이미 수락돼 IN_PROGRESS 가 된 챌린지 — PENDING 이 아니므로 안 걸린다.
+        challenges.put(
+            challenge(id = 1001L, opponentId = me, deadline = now.plusHours(5), status = ChallengeStatus.IN_PROGRESS),
+        )
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
+        // 챌린저가 취소해 row 가 물리 삭제된 경우 — 저장소에 아예 없다.
+        put(id = 58L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 2002L)
+
+        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+
+        assertEquals(false, views.first { it.notificationId == 57L }.referencePending, "처리됨")
+        assertEquals(false, views.first { it.notificationId == 58L }.referencePending, "삭제됨")
+    }
+
+    /**
+     * 🔴 **lazy expiry — `PENDING` 인데 이미 만료된 row 는 `false` 다.**
+     *
+     * 마감이 지나도 DB 의 status 는 `PENDING` 그대로다 (`EXPIRED` 전이는 배치 몫). `status` 만
+     * 보고 `true` 를 내리면 앱이 탭을 허용하고, 사용자는 **홈의 받은 도전장이 비어 있는 화면**에
+     * 도착한다 — 이 필드가 애초에 막으려던 그 증상이다. 경계는 `>` 라 **마감 정각은 아직 유효**하다
+     * (`findReceivedPending` 과 같은 규칙).
+     */
+    @Test
+    fun `CHALLENGE_REQUEST 는 PENDING 이어도 마감이 지났으면 false 다`() {
+        challenges.put(challenge(id = 1001L, opponentId = me, deadline = now.minusSeconds(1)))
+        challenges.put(challenge(id = 1002L, opponentId = me, deadline = now))
+        challenges.put(challenge(id = 1003L, opponentId = me, deadline = now.plusSeconds(1)))
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
+        put(id = 58L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1002L)
+        put(id = 59L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1003L)
+
+        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+
+        assertEquals(false, views.first { it.notificationId == 57L }.referencePending, "이미 지났다")
+        assertEquals(false, views.first { it.notificationId == 58L }.referencePending, "정각은 이미 만료다 (> 경계)")
+        assertEquals(true, views.first { it.notificationId == 59L }.referencePending, "1초 남았으면 살아 있다")
+    }
+
+    /**
+     * 🔴 **`referenceId` 가 null 이어도 `CHALLENGE_REQUEST` 는 non-null 이다** — `false` 다.
+     *
+     * 물어볼 대상 자체가 없으니 *"대기 중"* 일 수 없다. 여기서 `null` 을 내리면 **"`CHALLENGE_REQUEST`
+     * 면 non-null" 계약이 깨지고**, 앱은 이 타입에서 fallback 을 갖고 있지 않다.
+     */
+    @Test
+    fun `CHALLENGE_REQUEST 는 referenceId 가 null 이면 referencePending 이 false 다`() {
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = null)
+
+        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+
+        assertEquals(false, view.referencePending, "null 이 아니라 false 다 — non-null 보장이 계약이다")
+        assertEquals(0, challenges.callCount, "물어볼 id 가 없으면 쿼리도 없다")
+    }
+
+    /**
+     * 🔴 **`CHALLENGE_REQUEST` 외 타입은 전부 `null`** — 이 타입엔 그 개념이 없다.
+     *
+     * `null` 은 «비탭» 이 아니라 **«이 필드를 보지 마라»** 다 (`NotificationDto` KDoc). 여기서
+     * `false` 를 내리면 앱이 `false` 를 비탭으로 읽어 **증거 도착이 안 눌린다.**
+     */
+    @Test
+    fun `CHALLENGE_REQUEST 가 아닌 타입은 referencePending 이 null 이다`() {
+        // referenceId 가 challenges 에 실제로 존재해도 타입이 다르면 null 이어야 한다.
+        challenges.put(challenge(id = 1001L, opponentId = me, deadline = now.plusHours(5)))
+        put(id = 57L, type = NotificationType.OPPONENT_VERIFIED, referenceId = 1001L)
+        put(id = 58L, type = NotificationType.CHALLENGE_ACCEPTED, referenceId = 1001L)
+        put(id = 59L, type = NotificationType.CHALLENGE_REJECTED, referenceId = 1001L)
+
+        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+
+        assertEquals(3, views.size)
+        views.forEach { assertNull(it.referencePending, "type=${it.type} 에는 이 개념이 없다") }
+    }
+
+    /**
+     * 🔴 **`CHALLENGE_REQUEST` 가 0건이면 배치 조회를 아예 걸지 않는다** — `IN` 절 빈 컬렉션 가드.
+     *
+     * 저장소 선례(`findActiveByUser`·`findDueByStatus`)와 같은 자리다. 신청 알림이 없는 페이지는
+     * 흔하므로 이 가드가 곧 **쿼리 1개를 통째로 없애는 것**이기도 하다.
+     */
+    @Test
+    fun `CHALLENGE_REQUEST 가 없으면 배치 조회를 호출하지 않는다`() {
+        put(id = 57L, type = NotificationType.CHALLENGE_ACCEPTED, referenceId = 1001L)
+        put(id = 58L, type = NotificationType.OPPONENT_VERIFIED, referenceId = 1002L)
+
+        service.getNotifications(me, cursor = null, size = 20)
+
+        assertEquals(0, challenges.callCount, "빈 IN 절을 던지지 않는다")
+    }
+
+    /**
+     * 🔴 **N+1 회귀 장치 — 배치 조회는 페이지당 정확히 1회다.**
+     *
+     * 행마다 `findById` 를 부르는 구현으로 되돌아가면 여기서 즉시 깨진다. 목록 쿼리까지 합쳐
+     * **총 2쿼리**이고 페이지 크기와 무관하다.
+     */
+    @Test
+    fun `배치 조회는 CHALLENGE_REQUEST 가 여러 건이어도 1회만 호출된다`() {
+        (1001L..1003L).forEach { challenges.put(challenge(id = it, opponentId = me, deadline = now.plusHours(5))) }
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
+        put(id = 58L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1002L)
+        put(id = 59L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1003L)
+
+        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+
+        assertEquals(1, challenges.callCount, "행마다 부르면 그게 N+1 이다")
+        assertTrue(views.all { it.referencePending == true })
+    }
+
+    /**
+     * 🔴 **다른 타입의 `referenceId` 가 섞이면 안 된다.**
+     *
+     * `notifications.reference_id` 는 FK 가 아니고 **타입마다 참조 대상이 다르다** (V8 컬럼 주석).
+     * `FRIEND_REQUEST` 의 `users.id` 가 섞여 들어가면 challenges 테이블에 사용자 id 를 묻게 되고,
+     * 숫자가 겹치는 순간 **엉뚱한 챌린지 상태가 친구 요청 알림에 붙는다.**
+     */
+    @Test
+    fun `배치 조회에는 CHALLENGE_REQUEST 의 referenceId 만 넘어간다`() {
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
+        put(id = 58L, type = NotificationType.CHALLENGE_ACCEPTED, referenceId = 2002L)
+        put(id = 59L, type = NotificationType.FRIEND_REQUEST, referenceId = 3003L)
+        put(id = 60L, type = NotificationType.CHALLENGE_REQUEST, referenceId = null)
+
+        service.getNotifications(me, cursor = null, size = 20)
+
+        assertEquals(setOf(1001L), challenges.lastIds, "다른 타입의 참조 대상은 challenges 가 아니다")
+        assertEquals(me, challenges.lastOpponentId, "판정 주체는 알림 수신자다")
+        assertEquals(now, challenges.lastNow, "만료 기준은 주입된 Clock 이다")
+    }
+
+    /**
+     * 🔴 **`size + 1` 로 읽은 뒤 잘라낸 페이지의 id 만 넘어간다.**
+     *
+     * 초과분 1건은 응답에 나가지 않으므로 그 `referenceId` 까지 두 번째 쿼리에 실으면 **쓰지도 않을
+     * 행을 묻는 것**이다. `rows` 가 아니라 `rows.take(size)` 를 기준으로 모아야 한다.
+     */
+    @Test
+    fun `배치 조회에는 잘라낸 페이지의 id 만 넘어간다`() {
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
+        put(id = 56L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1002L)
+        // id DESC 라 이 행이 3번째 = size 2 의 초과분이다.
+        put(id = 55L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1003L)
+
+        val page = service.getNotifications(me, cursor = null, size = 2)
+
+        assertEquals(listOf(57L, 56L), page.notifications.map { it.notificationId })
+        assertEquals(setOf(1001L, 1002L), challenges.lastIds, "초과분 1003 이 섞이면 안 읽을 행을 묻는 것이다")
+    }
+
+    /** 판정 주체는 **알림 수신자**다 — 남이 받은 도전장을 내 알림에서 «대기 중» 으로 볼 수 없다. */
+    @Test
+    fun `상대가 opponent 인 PENDING 은 내 알림에서 false 다`() {
+        challenges.put(challenge(id = 1001L, opponentId = other, deadline = now.plusHours(5)))
+        put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
+
+        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+
+        assertFalse(view.referencePending!!, "내가 opponent 가 아니면 내가 응답할 대상이 아니다")
+    }
+
     // ─── fixtures ────────────────────────────────────────────────
+
+    private fun challenge(
+        id: Long,
+        opponentId: Long,
+        deadline: LocalDateTime,
+        status: ChallengeStatus = ChallengeStatus.PENDING,
+    ) = Challenge(
+        id = id,
+        challengerId = 99L,
+        opponentId = opponentId,
+        challengerMission = "미션",
+        opponentMission = null,
+        betContent = "내기",
+        challengeDate = LocalDate.of(2026, 9, 1),
+        deadline = deadline,
+        status = status,
+        result = null,
+        createdAt = LocalDateTime.of(2026, 9, 1, 9, 0),
+        completedAt = null,
+    )
 
     private fun put(
         id: Long,
@@ -322,5 +541,96 @@ class NotificationQueryServiceTest {
         override fun markAllAsReadByUserId(userId: Long): Int = error("조회 전용 서비스가 읽음 처리를 시도했다")
 
         override fun deleteAllByUserId(userId: Long): Int = error("조회 전용 서비스가 삭제를 시도했다")
+    }
+
+    /**
+     * `referencePending` 산출용 [ChallengeRepository] fake.
+     *
+     * ⚠️ [findPendingReceivedIdsIn] 은 **실제 쿼리와 같은 술어**를 다시 구현한다 —
+     * `opponent = :me AND PENDING AND deadline > :now`. 어긋나면 이 테스트가 거짓말을 한다
+     * (`findReceivedPending` 과 조건이 같아야 한다는 것이 계약 자체다).
+     *
+     * [callCount] 가 **N+1 회귀 장치**이고 [lastIds] 가 *"어떤 id 를 물었는가"* 의 단언 지점이다.
+     * 나머지 메서드는 이 경로에서 불리면 그 자체가 버그라 `error(...)` 다.
+     */
+    private class RecordingChallengeStore : ChallengeRepository {
+        private val store = LinkedHashMap<Long, Challenge>()
+
+        /** 🔴 페이지당 1회여야 한다. 2 이상이면 행마다 부르는 구현으로 되돌아간 것이다. */
+        var callCount = 0
+            private set
+
+        var lastOpponentId: Long? = null
+            private set
+
+        var lastIds: Set<Long>? = null
+            private set
+
+        var lastNow: LocalDateTime? = null
+            private set
+
+        fun put(c: Challenge) {
+            store[c.id!!] = c
+        }
+
+        override fun findPendingReceivedIdsIn(
+            opponentId: Long,
+            ids: Collection<Long>,
+            now: LocalDateTime,
+        ): Set<Long> {
+            callCount++
+            lastOpponentId = opponentId
+            lastIds = ids.toSet()
+            lastNow = now
+            // 실제 JPQL 과 같은 조건 3개. 저장소에 없는 id(= 삭제됨)는 자연히 빠진다.
+            return store.values
+                .filter {
+                    it.opponentId == opponentId &&
+                        it.id in ids &&
+                        it.status == ChallengeStatus.PENDING &&
+                        it.deadline > now
+                }
+                .mapNotNull { it.id }
+                .toSet()
+        }
+
+        override fun findActiveByUser(userId: Long, statuses: Collection<ChallengeStatus>): List<Challenge> =
+            error("알림 조회가 홈 목록을 읽었다")
+
+        override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> =
+            error("알림 조회가 최근 판정 목록을 읽었다")
+
+        override fun findCompletedHistoryByUserInMonth(
+            userId: Long,
+            monthStart: LocalDate,
+            nextMonthStart: LocalDate,
+        ): List<Challenge> = error("알림 조회가 보관함을 읽었다")
+
+        override fun findEarliestCompletedChallengeDate(userId: Long): LocalDate? =
+            error("알림 조회가 보관함 하한을 읽었다")
+
+        /** 🔴 행마다 단건 조회로 되돌아가는 구현을 막는다 — 그게 정확히 N+1 이다. */
+        override fun findById(id: Long): Challenge? = error("배치 조회 대신 단건 조회를 썼다 (N+1)")
+
+        override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> =
+            error("알림 조회가 받은 도전장 목록을 읽었다 — 필요한 것은 id 집합뿐이다")
+
+        override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> =
+            error("알림 조회가 배치 판정 대상을 읽었다")
+
+        override fun findConflicting(
+            userA: Long,
+            userB: Long,
+            challengeDate: LocalDate,
+            statuses: Collection<ChallengeStatus>,
+        ): List<Challenge> = error("알림 조회가 중복 판정을 했다")
+
+        override fun save(challenge: Challenge): Challenge = error("조회 전용 서비스가 저장을 시도했다")
+
+        override fun saveAndFlush(challenge: Challenge): Challenge = error("조회 전용 서비스가 저장을 시도했다")
+
+        override fun deleteById(id: Long) = error("조회 전용 서비스가 삭제를 시도했다")
+
+        override fun deletePendingSentBy(userId: Long): Int = error("조회 전용 서비스가 삭제를 시도했다")
     }
 }

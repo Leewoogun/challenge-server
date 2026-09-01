@@ -1,9 +1,12 @@
 package com.lwg.challenge.service.notification
 
+import com.lwg.challenge.domain.challenge.ChallengeRepository
 import com.lwg.challenge.domain.notification.Notification
 import com.lwg.challenge.domain.notification.NotificationRepository
+import com.lwg.challenge.domain.notification.NotificationType
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.time.Clock
 import java.time.LocalDateTime
 
 /**
@@ -28,10 +31,36 @@ import java.time.LocalDateTime
  * 앱이 빈 페이지를 한 번 더 왕복했을 자리다.
  *
  * 정렬·커서 축이 `createdAt` 이 아니라 `id` 인 근거는 `NotificationJpaRepository` KDoc 에 있다.
+ *
+ * ## 🔴 `referencePending` 은 **배치 조회 1회**로 채운다 — join 이 아니다
+ *
+ * 목록을 그린 뒤 그 페이지의 `CHALLENGE_REQUEST` 참조 id 를 모아
+ * [ChallengeRepository.findPendingReceivedIdsIn] 을 **한 번** 부른다. 그래서 **페이지 크기와
+ * 무관하게 총 2쿼리**이고(목록 1 + 판정 1), COUNT 는 여전히 없다. `CHALLENGE_REQUEST` 가 한 건도
+ * 없으면 두 번째 쿼리를 **아예 걸지 않는다** — `IN` 절 빈 컬렉션 가드를 겸한다
+ * (`findActiveByUser`·`findDueByStatus` 의 선례와 같은 자리).
+ *
+ * ## 🔴 join 을 쓰지 않는 이유는 **성능이 아니라 정합성**이다
+ *
+ * `notifications.reference_id` 는 **FK 가 아니고, 타입마다 참조 대상이 다르다** (V8 의
+ * `COMMENT ON COLUMN`). 지금 3종이 전부 `challenges.id` 인 것은 **오늘의 사실이지 규약이 아니다** —
+ * `FRIEND_REQUEST` 는 `users.id` 를 가리킬 예정으로 이미 선언돼 있다 (`NotificationType`).
+ *
+ * 그래서 `notifications.reference_id = challenges.id` 로 조인하면, `FRIEND_REQUEST` 가 열리는
+ * 순간 **`users.id` 를 `challenges.id` 에 조인한다.** 숫자가 겹치면 **엉뚱한 챌린지의 상태가 친구
+ * 요청 알림에 붙고**, 안 겹치면 (INNER JOIN 일 때) **행이 통째로 사라진다.** 어느 쪽도 예외를
+ * 던지지 않는다 — 조인은 성공하고 응답도 200 이다.
+ *
+ * 🔴 **타입 필터를 조인 조건 밖에 두면 조용히 틀린다.** 배치 조회는 타입 필터가 **id 를 모으는
+ * 단계**에 있어서 애초에 challenge 가 아닌 참조는 쿼리에 들어가지도 않는다 — 조인 순서에 정합성이
+ * 걸리지 않는다.
  */
 @Service
 class NotificationQueryService(
     private val notificationRepository: NotificationRepository,
+    private val challengeRepository: ChallengeRepository,
+    /** 만료 경계(`deadline > now`) 판정 기준. 주입받아야 테스트가 시각을 고정할 수 있다 (ADR-0010). */
+    private val clock: Clock,
 ) {
 
     /**
@@ -47,7 +76,11 @@ class NotificationQueryService(
         // 🔴 size 가 아니라 size + 1 이다 — 초과분 1건의 존재가 곧 hasMore 다.
         val rows: List<Notification> = notificationRepository.findPageByUserId(userId, cursor, size + 1)
         val hasMore: Boolean = rows.size > size
-        val page: List<NotificationView> = rows.take(size).map { it.toView() }
+        // 🔴 초과분을 잘라 낸 **최종 페이지**를 기준으로 판정한다 — 응답에 나가지 않을 1건의
+        //    referenceId 까지 두 번째 쿼리에 실으면 안 쓸 행을 묻는 것이다.
+        val visible: List<Notification> = rows.take(size)
+        val pendingReferenceIds: Set<Long> = findPendingReferenceIds(userId, visible)
+        val page: List<NotificationView> = visible.map { it.toView(pendingReferenceIds) }
 
         return NotificationPage(
             notifications = page,
@@ -72,7 +105,33 @@ class NotificationQueryService(
 
     // ─── helpers ─────────────────────────────────────────────────
 
-    private fun Notification.toView(): NotificationView = NotificationView(
+    /**
+     * [page] 가 참조하는 챌린지 중 **[userId] 가 아직 응답 대기 중인 것**의 id 집합.
+     *
+     * 🔴 **`CHALLENGE_REQUEST` 의 `referenceId` 만** 모은다. 다른 타입의 `referenceId` 는
+     * challenge 를 가리킨다는 보장이 없다 (V8 컬럼 주석 — 클래스 KDoc). 여기서 섞으면
+     * `FRIEND_REQUEST` 의 `users.id` 를 challenges 테이블에 묻게 된다.
+     *
+     * 🔴 **비어 있으면 쿼리를 걸지 않는다** — `IN` 절 빈 컬렉션 가드이자, 알림에
+     * `CHALLENGE_REQUEST` 가 없는 흔한 페이지에서 쿼리 1개를 통째로 없애는 자리다.
+     */
+    private fun findPendingReferenceIds(userId: Long, page: List<Notification>): Set<Long> {
+        val referenceIds: Set<Long> = page
+            .filter { it.type == NotificationType.CHALLENGE_REQUEST }
+            .mapNotNull { it.referenceId }
+            .toSet()
+        if (referenceIds.isEmpty()) return emptySet()
+
+        // 🔴 페이지당 **1회**다. 행마다 부르면 그게 N+1 이다.
+        return challengeRepository.findPendingReceivedIdsIn(
+            opponentId = userId,
+            ids = referenceIds,
+            // 만료 판정 기준 — 주입된 Clock 이 정본이다 (`LocalDateTime.now()` 를 직접 부르지 않는다).
+            now = LocalDateTime.now(clock),
+        )
+    }
+
+    private fun Notification.toView(pendingReferenceIds: Set<Long>): NotificationView = NotificationView(
         // 보관함(`ChallengeHistoryService`)과 같은 패턴 — 조회로 나온 row 의 id 는 null 일 수 없다.
         notificationId = id ?: error("영속화된 notification 의 id 는 null 일 수 없습니다"),
         // 🔴 enum 이 아니라 name 문자열이다 — 근거는 [NotificationView.type] KDoc.
@@ -81,6 +140,12 @@ class NotificationQueryService(
         // 도메인/DB 의 title 은 그대로 살아 있다 (푸시 헤드라인이 그 값을 쓴다).
         body = body,
         referenceId = referenceId,
+        // 🔴 `CHALLENGE_REQUEST` 만 non-null 이다 — 다른 타입에는 이 개념이 없다.
+        //    `referenceId` 가 null 이면 물어볼 대상 자체가 없으므로 false 다 (non-null 보장 유지).
+        referencePending = when (type) {
+            NotificationType.CHALLENGE_REQUEST -> referenceId != null && referenceId in pendingReferenceIds
+            else -> null
+        },
         createdAt = createdAt,
     )
 }
@@ -141,6 +206,16 @@ data class NotificationView(
     val body: String,
     /** 타입에 따라 참조 대상이 다르다. `CHALLENGE_*` 는 `challenges.id`. **null 일 수 있다.** */
     val referenceId: Long?,
+    /**
+     * *"이 알림이 가리키는 대상이 아직 응답을 기다리는가."*
+     *
+     * `true` 응답 대기 / `false` 처리·만료·종료 **또는 삭제** / `null` 이 타입엔 개념이 없다.
+     *
+     * 🔴 **[type] 이 `CHALLENGE_REQUEST` 면 항상 non-null** 이고, 그 외 타입은 전부 `null` 이다.
+     * 산출 술어는 홈의 '받은 도전장'과 **같다** — `opponent = 수신자 AND PENDING AND deadline > now`
+     * ([ChallengeRepository.findPendingReceivedIdsIn]). 자세한 의미는 `NotificationDto` KDoc.
+     */
+    val referencePending: Boolean?,
     /** KST 벽시계 (ADR-0010). 🔴 정렬 축이 아니다 — 정렬은 `id` 다. */
     val createdAt: LocalDateTime,
 )

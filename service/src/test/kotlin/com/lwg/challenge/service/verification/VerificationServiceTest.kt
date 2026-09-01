@@ -561,6 +561,13 @@ private class FakeChallengeRepository : ChallengeRepository {
 
     override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> = emptyList()
 
+    /** 알림 목록 전용 — 이 테스트가 다루는 경로가 아니다 (`NotificationQueryServiceTest` 소관). */
+    override fun findPendingReceivedIdsIn(
+        opponentId: Long,
+        ids: Collection<Long>,
+        now: LocalDateTime,
+    ): Set<Long> = error("인증 경로는 응답 대기 판정을 하지 않는다")
+
     /** 홈 목록 전용 — 이 테스트가 다루는 경로가 아니다 (`ActiveChallengeServiceTest` 소관). */
     override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> = emptyList()
 
