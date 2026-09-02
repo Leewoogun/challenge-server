@@ -14,6 +14,7 @@ import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.security.SecurityRequirement
 import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.http.CacheControl
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -21,11 +22,11 @@ import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestPart
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.multipart.MultipartFile
-import java.time.Duration
 
 /**
  * 챌린지 인증 — 사진 제출 / 조회 / 사진 서빙 (challenge-verification api-contract §2~4).
@@ -63,10 +64,12 @@ class VerificationController(
         consumes = [MediaType.MULTIPART_FORM_DATA_VALUE],
     )
     @Operation(
-        summary = "인증 사진 제출 (저장 + VERIFIED 전이 + 상대에게 알림)",
+        summary = "인증 사진 제출/교체 (저장 + VERIFIED 전이 + 최초 1회 상대에게 알림)",
         description = "multipart part `photo` 에 JPEG 바이트를 실어 보낸다 (최대 5MB). " +
-            "IN_PROGRESS + 당사자만. 재제출은 거부(700 `이미 인증을 완료했어요`) — " +
-            "응답을 못 받고 재시도할 때는 먼저 조회 API 로 내 status 를 확인한다.",
+            "IN_PROGRESS + 당사자만. 🔴 재제출은 **last-write-wins** — 마지막에 올린 사진이 최종본이고 " +
+            "이전 사진 파일은 삭제된다. verifiedAt 은 최종 교체 시각으로 갱신되며, " +
+            "상대에게 가는 알림은 **최초 인증 1회뿐**이다(교체는 알리지 않는다). " +
+            "응답을 유실했으면 그냥 다시 올리면 된다 — 선행 status 조회가 필요 없다.",
     )
     @SecurityRequirement(name = "bearerAuth")
     fun submit(
@@ -116,26 +119,39 @@ class VerificationController(
      * 로더가 깨지므로 **HTTP status 로만** 답한다. 서비스도 같은 이유로 예외 대신
      * [PhotoReadResult] 를 돌려준다 — `VerificationService.readPhoto` KDoc 참조.
      *
-     * ## 🔴 캐시 — 200 은 길게, 404 는 절대 캐시하지 않는다
+     * ## 🔴 캐시 — 200 은 **매번 재검증**, 404 는 절대 캐시하지 않는다
      *
-     * 사진은 재제출 거부로 **불변**이고 URL 에 만료가 없어졌으므로 200 은 길게 캐시해도
-     * 안전하다 — 이번 변경의 실질 이득이다(앱이 재진입해도 재다운로드가 없다).
-     * 그러나 **404 는 캐시하면 안 된다** — 상대가 아직 인증하지 않은 상태에서 받은 404 가
-     * 캐시되면 **상대가 인증한 뒤에도 사진이 안 보인다.** 같은 URL 의 응답이 404 → 200 으로
-     * 바뀌는 자리다. 403/404 에 `no-store` 를 붙이는 이유다.
+     * 🔴 **`max-age=86400` 은 폐기됐다 (verification-photo-replace, 2026-09-02).** 그 값이 서 있던
+     * 근거는 *"사진은 재제출 거부로 불변"* 이었는데, **교체가 열리면서 그 전제가 사라졌다.**
+     * 경로는 그대로인데 바이트가 바뀌므로, 길게 캐시하면 **상대가 사진을 바꿔도 최대 하루 동안
+     * 옛 사진이 보인다** — 에러도 로그도 남지 않는 조용한 실패다.
+     *
+     * 대신 `no-cache`(= 쓸 때마다 재검증) + **ETag** 를 준다. 바뀌지 않았으면 **304 + 바디 0바이트**
+     * 라 재진입 비용은 그대로 싸다. 🔵 ETag 는 저장소 key 에서 나오므로 *"사진이 바뀌면 반드시
+     * 바뀐다"* 가 보장된다 (`VerificationService.photoETag`).
+     *
+     * ⚠️ **HTTP 캐시만 다룬다.** 이미지 로더가 URL 을 키로 하는 **메모리 캐시**를 따로 두면
+     * 이 헤더가 닿지 않는다 — 앱 쪽에서 별도로 무효화해야 한다 (mobile-dev 통지 대상).
+     *
+     * **404 는 캐시하면 안 된다** — 상대가 아직 인증하지 않은 상태에서 받은 404 가 캐시되면
+     * **상대가 인증한 뒤에도 사진이 안 보인다.** 같은 URL 의 응답이 404 → 200 으로 바뀌는
+     * 자리다. 403/404 에 `no-store` 를 붙이는 이유다.
      */
     @GetMapping("/challenges/{id}/photos/{party}")
     @Operation(
         summary = "인증 사진 바이트 (당사자만)",
         description = "🔴 응답이 BaseResponse 가 아니라 **JPEG 바이트**다. 실패는 바디 없이 HTTP status 로만 답한다: " +
-            "200=바이트(image/jpeg), 400=party 가 challenger/opponent 가 아님, 401=인증 없음, " +
+            "200=바이트(image/jpeg), 304=If-None-Match 가 현재 ETag 와 같음, " +
+            "400=party 가 challenger/opponent 가 아님, 401=인증 없음, " +
             "403=당사자 아님, 404=챌린지 없음/아직 인증 안 함/파일 없음. " +
-            "앱은 이미지 로더의 인증 HttpClient 로 이 경로를 그대로 연다.",
+            "앱은 이미지 로더의 인증 HttpClient 로 이 경로를 그대로 연다. " +
+            "🔴 사진 교체가 가능하므로 같은 경로가 다른 바이트를 낼 수 있다 — 200 은 `no-cache` 이며 ETag 로 재검증한다.",
     )
     @SecurityRequirement(name = "bearerAuth")
     fun readPhoto(
         @PathVariable("id") id: Long,
         @PathVariable("party") party: String,
+        @RequestHeader(HttpHeaders.IF_NONE_MATCH, required = false) ifNoneMatch: String?,
     ): ResponseEntity<ByteArray> {
         // 🔴 enum 을 @PathVariable 로 직접 받지 않는다 — 변환 실패가
         //    MethodArgumentTypeMismatchException 으로 튀어 handleUncaught 의 500 이 된다.
@@ -144,10 +160,19 @@ class VerificationController(
             ?: return ResponseEntity.badRequest().build()
 
         return when (val result = verificationService.readPhoto(currentUserId(), id, verificationParty)) {
-            is PhotoReadResult.Found -> ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(result.contentType))
-                .cacheControl(CacheControl.maxAge(Duration.ofDays(1)).cachePrivate())
-                .body(result.bytes)
+            is PhotoReadResult.Found ->
+                if (matchesETag(ifNoneMatch, result.etag)) {
+                    ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                        .eTag(result.etag)
+                        .cacheControl(revalidate())
+                        .build()
+                } else {
+                    ResponseEntity.ok()
+                        .contentType(MediaType.parseMediaType(result.contentType))
+                        .eTag(result.etag)
+                        .cacheControl(revalidate())
+                        .body(result.bytes)
+                }
 
             PhotoReadResult.Forbidden -> ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .cacheControl(CacheControl.noStore())
@@ -158,6 +183,25 @@ class VerificationController(
                 .build()
         }
     }
+
+    /**
+     * 사진 응답의 캐시 정책 — **저장은 하되 쓸 때마다 재검증**한다 (`no-cache, private`).
+     *
+     * `no-store` 가 아니다. 바이트를 갖고 있어야 304 가 의미를 갖는다.
+     */
+    private fun revalidate(): CacheControl = CacheControl.noCache().cachePrivate()
+
+    /**
+     * `If-None-Match` 가 현재 ETag 를 가리키는가.
+     *
+     * 목록(`a, b`)과 약한 검증자(`W/"..."`)를 받아 준다 — 중간 캐시가 붙이는 형태다.
+     * `*` 는 **조건부 GET 의미가 아니라 조건부 쓰기용**이라 여기서 다루지 않는다.
+     */
+    private fun matchesETag(ifNoneMatch: String?, current: String): Boolean =
+        ifNoneMatch
+            ?.split(',')
+            ?.any { it.trim().removePrefix("W/") == current }
+            ?: false
 
     // ─── helpers ─────────────────────────────────────────────────
 

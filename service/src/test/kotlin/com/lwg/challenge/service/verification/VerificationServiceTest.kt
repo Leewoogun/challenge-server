@@ -25,10 +25,12 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.context.ApplicationEventPublisher
+import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 
 /**
  * [VerificationService] 단위 테스트 (challenge-verification T-B2·T-B3·T-B4).
@@ -39,11 +41,18 @@ import java.time.LocalDateTime
  * - 🔴 당사자가 아니면 사진을 볼 수 없다 — 제3자 요청은 거부된다
  * - 같은 사용자가 두 번 제출해도 row 가 하나다
  * - `IN_PROGRESS` 가 아닌 챌린지에는 제출할 수 없다
- * - 🔴 재제출은 전면 거부다 (계약 §3) — 그리고 **거부된 제출은 저장소에 아무것도 남기지 않는다**
  * - 🔴 `photoDeleted` 가 **탈퇴로 지워진 사진과 진짜 데이터 이상을 가른다** (mypage T-B1 부록 A)
  *
+ * verification-photo-replace(2026-09-02) 가 더한 것:
+ * - 🔴 재제출은 **`last-write-wins`** 다 — 사진이 교체되고 **이전 파일이 지워진다**
+ * - 🔴 `OPPONENT_VERIFIED` 는 **최초 1회만** — 3회 제출해도 이벤트는 1건이다
+ * - 🔴 `verified_at` 이 **최종 교체 시각**으로 갱신된다
+ * - 🔴 **거부 검사는 교체 경로에도 그대로 산다** — 당사자·`IN_PROGRESS`·JPEG·빈 바이트
+ *
  * ⚠️ **덮지 못하는 것**: `AFTER_COMMIT` 타이밍. 이 테스트에는 트랜잭션이 없어 알 수 있는 것은
- * *무엇을 발행했는가* 뿐이다 (`NotificationDispatcherTest` 와 같은 한계).
+ * *무엇을 발행했는가* 뿐이다 (`NotificationDispatcherTest` 와 같은 한계). 사진 삭제가 커밋
+ * **뒤**라는 것도 시점으로는 못 본다 — 대신 *"[VerificationSubmitTransactionalWorker] 는 지우지
+ * 않는다"* 와 *"[VerificationService.submit] 에 `@Transactional` 이 없다"* 를 구조로 고정한다.
  */
 class VerificationServiceTest {
 
@@ -52,9 +61,16 @@ class VerificationServiceTest {
     private val users = FakeUserStore()
     private val photos = FakePhotoStorage()
     private val events = RecordingEventPublisher()
-    private val clock = Clock.fixed(Instant.parse("2026-08-14T06:32:10Z"), KstTime.ZONE)
 
-    private val service = VerificationService(challenges, verifications, users, photos, clock, events)
+    /**
+     * 🔴 `Clock.fixed` 가 아니다 — 교체가 `verified_at` 을 **갱신**하는지 보려면 두 제출의
+     * 시각이 달라야 한다. 고정 시계로는 *"갱신했다"* 와 *"안 건드렸다"* 가 구분되지 않는다.
+     * 기본값은 예전 `Clock.fixed` 와 같은 순간이라 나머지 테스트의 단언은 그대로다.
+     */
+    private val clock = MutableClock(Instant.parse("2026-08-14T06:32:10Z"), KstTime.ZONE)
+
+    private val submitWorker = VerificationSubmitTransactionalWorker(challenges, verifications, photos, clock, events)
+    private val service = VerificationService(challenges, verifications, users, photos, submitWorker)
 
     private companion object {
         const val CHALLENGE_ID = 7L
@@ -159,28 +175,215 @@ class VerificationServiceTest {
         assertNull(opponent.photoUrl)
     }
 
-    // ─── 재제출 정책 (계약 §3 — 전면 거부) ───────────────────────
+    // ─── 재제출 정책 (계약 §3 — last-write-wins, 2026-09-02 개정) ─
 
     /**
-     * 🔴 multipart 에서는 *"같은 촬영본의 재시도"* 와 *"다른 사진으로 교체"* 를 서버가 구분할 수
-     * 없으므로 재제출은 **전면 거부**다. 저장·알림 어느 쪽도 일어나면 안 된다 — 조용히 버려진
-     * 사진을 앱이 성공으로 오해하는 경로를 남기지 않는다.
+     * 🔴 spec 수용 기준: *"`VERIFIED` 상태에서 재제출하면 거부되지 않고 사진이 교체된다."*
+     *
+     * 뒤집은 근거는 *"판별 수단이 생겼다"* 가 아니라 **전제 소멸**이다 — 옛 정책이 막으려던 것은
+     * *"올린 사진이 조용히 버려진다"* 였는데 `last-write-wins` 는 올린 사진을 **저장한다.**
      */
     @Test
-    fun `이미 인증했으면 재제출이 거부되고 저장도 알림도 없다`() {
+    fun `재제출하면 사진이 교체되고 마지막 사진이 최종본이다`() {
+        val replacement = JPEG + 0x33.toByte()
+
         val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
-        events.clear()
+        val second = service.submit(CHALLENGER, CHALLENGE_ID, replacement)
 
-        val e = assertThrows<SnackbarException> {
-            service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
-        }
-
-        assertEquals(VerificationService.MSG_ALREADY_VERIFIED, e.message)
-        assertEquals(setOf(first.photoUrl), photos.stored.keys, "거부된 재제출이 새 파일을 만들면 안 된다")
-        assertTrue(events.challengeEvents().isEmpty(), "거부된 재제출이 상대에게 알림을 보내면 안 된다")
+        assertEquals(VerificationStatus.VERIFIED, second.status)
+        assertTrue(second.photoUrl != first.photoUrl, "교체는 새 key 를 만든다: ${second.photoUrl}")
+        assertArrayEquals(replacement, photos.stored[second.photoUrl!!], "마지막에 올린 바이트가 최종본이다")
         val mine = verifications.all().single { it.userId == CHALLENGER }
-        assertEquals(first.photoUrl, mine.photoUrl, "처음 저장된 사진이 그대로여야 한다")
-        assertEquals(first.verifiedAt, mine.verifiedAt)
+        assertEquals(second.photoUrl, mine.photoUrl, "조회가 보는 것도 마지막 사진이어야 한다")
+    }
+
+    /**
+     * 🔴 spec 수용 기준: *"이전 사진 파일이 삭제된다 — 참조 0인 파일이 디스크에 쌓이지 않는다."*
+     */
+    @Test
+    fun `재제출하면 이전 사진 파일이 삭제된다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        val second = service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+
+        assertEquals(listOf(first.photoUrl), photos.deleted, "참조가 끊긴 이전 key 를 지워야 한다")
+        assertEquals(setOf(second.photoUrl), photos.stored.keys, "저장소에는 최종본 하나만 남는다")
+    }
+
+    /** 첫 제출은 지울 것이 없다 — 없는 key 를 지우러 가면 안 된다. */
+    @Test
+    fun `첫 제출은 아무것도 삭제하지 않는다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        assertTrue(photos.deleted.isEmpty(), "actual=${photos.deleted}")
+    }
+
+    /**
+     * 🔴 **삭제는 커밋 후여야 한다** ([PhotoStorage.delete] KDoc — 롤백돼도 파일은 안 돌아온다).
+     *
+     * 단위 테스트에는 트랜잭션이 없어 *시점* 은 볼 수 없다. 대신 **트랜잭션 경계 안쪽인
+     * [VerificationSubmitTransactionalWorker] 가 삭제를 하지 않는다**는 것을 고정한다 —
+     * 누군가 편의상 worker 안에서 지우면 이 테스트가 깨진다.
+     */
+    @Test
+    fun `트랜잭션 경계 안에서는 이전 파일을 지우지 않고 key 만 돌려준다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        photos.deleted.clear()
+
+        val outcome = submitWorker.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+
+        assertEquals(first.photoUrl, outcome.replacedPhotoKey, "지울 key 를 호출자에게 넘겨야 한다")
+        assertTrue(photos.deleted.isEmpty(), "커밋 전에 지우면 롤백 시 파일이 돌아오지 않는다")
+        assertTrue(photos.stored.containsKey(first.photoUrl), "이전 파일이 트랜잭션 안에서 사라지면 안 된다")
+    }
+
+    /**
+     * 🔴 **`@Transactional` 의 위치가 이 구조의 전부다.**
+     *
+     * [VerificationService.submit] 에 붙으면 커밋이 그 메서드가 끝날 때까지 미뤄져 **삭제가 커밋
+     * 전으로 당겨진다.** worker 에서 빠지면 파일 저장과 row 저장이 따로 커밋된다.
+     * 둘 다 컴파일되고 다른 테스트는 전부 통과하므로 여기서 못박는다
+     * (`NotificationDispatcherWiringTest` 와 같은 방식).
+     */
+    @Test
+    fun `submit 의 트랜잭션 경계는 worker 에만 있다`() {
+        val outer = VerificationService::class.java
+            .getDeclaredMethod("submit", Long::class.java, Long::class.java, ByteArray::class.java)
+        val inner = VerificationSubmitTransactionalWorker::class.java
+            .getDeclaredMethod("submit", Long::class.java, Long::class.java, ByteArray::class.java)
+
+        assertNull(
+            outer.getAnnotation(Transactional::class.java),
+            "VerificationService.submit 에 @Transactional 이 붙으면 이전 파일 삭제가 커밋 전에 실행된다",
+        )
+        assertNotNull(
+            inner.getAnnotation(Transactional::class.java),
+            "worker 에서 @Transactional 이 빠지면 파일 저장과 row 저장이 따로 커밋된다",
+        )
+    }
+
+    /**
+     * 🔴 spec 수용 기준: *"`OPPONENT_VERIFIED` 알림은 최초 1회만 — 3회 제출 시 row 증가가 1."*
+     *
+     * 교체할 때마다 보내면 사진을 다듬는 동안 상대의 알림함이 같은 문구로 채워진다.
+     */
+    @Test
+    fun `세 번 제출해도 상대에게 가는 알림은 한 건이다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x44.toByte())
+
+        assertEquals(1, events.challengeEvents().size, "교체는 알리지 않는다: ${events.challengeEvents()}")
+        assertEquals(NotificationType.OPPONENT_VERIFIED, events.challengeEvents().single().type)
+    }
+
+    /** 🔴 spec 수용 기준: *"`verified_at` 이 최종 교체 시각으로 갱신된다."* */
+    @Test
+    fun `재제출하면 verified_at 이 최종 교체 시각으로 갱신된다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        clock.advanceMinutes(37)
+
+        val second = service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+
+        assertEquals(LocalDateTime.now(clock), second.verifiedAt)
+        assertTrue(second.verifiedAt!! > first.verifiedAt!!, "${second.verifiedAt} 가 ${first.verifiedAt} 보다 뒤여야 한다")
+    }
+
+    /** 교체도 있는 row 를 채운다 — `uq_verifications_challenge_user` 는 여전히 하나만 허용한다. */
+    @Test
+    fun `재제출해도 row 는 여전히 하나다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        val second = service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+
+        assertEquals(first.id, second.id)
+        assertEquals(2, verifications.all().size, "row 수가 늘면 uq_verifications_challenge_user 가 터진다")
+    }
+
+    /**
+     * 🔴 **거부 하나를 지웠다고 나머지 검사까지 흘려보내지 않는다.** 교체 경로도 JPEG 검사를
+     * 지나야 하고, 거부되면 **이전 사진은 그대로 살아 있어야 한다.**
+     */
+    @Test
+    fun `교체 요청도 JPEG 검사를 지나고 거부되면 이전 사진이 살아 있다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        val e = assertThrows<SnackbarException> { service.submit(CHALLENGER, CHALLENGE_ID, PNG) }
+
+        assertEquals(VerificationService.MSG_NOT_JPEG, e.message)
+        assertEquals(setOf(first.photoUrl), photos.stored.keys, "거부된 교체가 파일을 만들거나 지우면 안 된다")
+        assertTrue(photos.deleted.isEmpty())
+        assertEquals(first.photoUrl, verifications.all().single { it.userId == CHALLENGER }.photoUrl)
+    }
+
+    @Test
+    fun `교체 요청도 빈 바이트를 거부하고 이전 사진이 살아 있다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        val e = assertThrows<SnackbarException> { service.submit(CHALLENGER, CHALLENGE_ID, ByteArray(0)) }
+
+        assertEquals(VerificationService.MSG_PHOTO_REQUIRED, e.message)
+        assertEquals(setOf(first.photoUrl), photos.stored.keys)
+        assertTrue(photos.deleted.isEmpty())
+    }
+
+    /**
+     * 🔴 spec 수용 기준: *"`IN_PROGRESS` 가 아니면 여전히 거부된다 (마감 후 교체 불가)."*
+     *
+     * 증거 보존은 여기에 걸려 있다 — *"마감 시점의 사진이 최종본이고 그 뒤로 불변"*.
+     */
+    @Test
+    fun `마감 후에는 교체할 수 없고 이전 사진이 그대로 남는다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        challenges.put(challenge(ChallengeStatus.COMPLETED))
+
+        val e = assertThrows<OneButtonDialogException> { service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte()) }
+
+        assertEquals(VerificationService.MSG_NOT_IN_PROGRESS, e.message)
+        assertEquals(setOf(first.photoUrl), photos.stored.keys)
+        assertTrue(photos.deleted.isEmpty())
+    }
+
+    /** 제3자가 남의 인증 사진을 교체할 수 없다 — 당사자 검사도 교체 경로에 그대로 산다. */
+    @Test
+    fun `제3자는 남의 인증 사진을 교체할 수 없다`() {
+        val first = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        val e = assertThrows<SnackbarException> { service.submit(STRANGER, CHALLENGE_ID, JPEG + 0x33.toByte()) }
+
+        assertEquals(VerificationService.MSG_NOT_MINE, e.message)
+        assertEquals(setOf(first.photoUrl), photos.stored.keys)
+        assertTrue(photos.deleted.isEmpty())
+    }
+
+    /**
+     * 🔴 삭제 실패는 **삼킨다.** 여기서 예외가 새면 이미 커밋된 교체가 실패로 응답되고,
+     * 사용자는 사진이 안 바뀐 줄 알고 다시 올린다 — 그때마다 고아가 하나씩 더 는다.
+     * 남는 것은 아무 row 도 가리키지 않는 파일 하나뿐이다 (spec §6).
+     */
+    @Test
+    fun `이전 파일 삭제가 실패해도 교체는 성공한다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        photos.failDelete = true
+
+        val second = service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+
+        assertEquals(VerificationStatus.VERIFIED, second.status)
+        assertEquals(second.photoUrl, verifications.all().single { it.userId == CHALLENGER }.photoUrl)
+    }
+
+    /**
+     * 탈퇴가 `photo_url` 만 NULL 로 밀어 둔 row 에 다시 제출하는 경우 — 지울 key 가 **없다.**
+     * 교체 판정을 `status` 로 했다면 여기서 null 을 지우러 갔을 것이다.
+     */
+    @Test
+    fun `key 가 없는 VERIFIED row 에 제출해도 삭제를 시도하지 않는다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        verifications.clearPhotoKeysByUserId(CHALLENGER)
+        photos.stored.clear()
+
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+
+        assertTrue(photos.deleted.isEmpty(), "지울 key 가 없으면 삭제를 부르지 않는다: ${photos.deleted}")
     }
 
     // ─── 페이로드 거절 ───────────────────────────────────────────
@@ -449,7 +652,49 @@ class VerificationServiceTest {
 
         val result = service.readPhoto(CHALLENGER, CHALLENGE_ID, VerificationParty.CHALLENGER)
 
-        assertEquals(PhotoReadResult.Found(JPEG, "image/jpeg"), result)
+        assertEquals(PhotoReadResult.Found(JPEG, "image/jpeg", etagOf(result)), result)
+    }
+
+    /**
+     * 🔴 사진 교체가 열리면서 **같은 경로가 다른 바이트를 낸다.** ETag 가 바뀌지 않으면 앱이
+     * 304 를 받고 옛 사진을 계속 보여준다 — 에러도 로그도 남지 않는 조용한 실패다.
+     */
+    @Test
+    fun `사진을 교체하면 ETag 가 바뀐다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        val before = etagOf(service.readPhoto(OPPONENT, CHALLENGE_ID, VerificationParty.CHALLENGER))
+
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG + 0x33.toByte())
+        val after = etagOf(service.readPhoto(OPPONENT, CHALLENGE_ID, VerificationParty.CHALLENGER))
+
+        assertTrue(before != after, "교체 전후의 ETag 가 같으면 앱이 옛 사진을 계속 본다: $before")
+    }
+
+    /** 안 바뀌었으면 안 바뀌어야 한다 — 그래야 304 로 재진입이 싸다. */
+    @Test
+    fun `사진이 그대로면 ETag 도 그대로다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        val first = etagOf(service.readPhoto(OPPONENT, CHALLENGE_ID, VerificationParty.CHALLENGER))
+        val second = etagOf(service.readPhoto(OPPONENT, CHALLENGE_ID, VerificationParty.CHALLENGER))
+
+        assertEquals(first, second)
+    }
+
+    /** 🔴 계약 §0.4 — 저장소 key 는 앱에 노출되지 않는다. ETag 는 응답 헤더라 여기가 새는 자리다. */
+    @Test
+    fun `ETag 에 저장소 key 가 그대로 실리지 않는다`() {
+        val saved = service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+
+        val etag = etagOf(service.readPhoto(OPPONENT, CHALLENGE_ID, VerificationParty.CHALLENGER))
+
+        assertTrue(!etag.contains(saved.photoUrl!!), "key 가 ETag 로 새 나갔다: $etag")
+        assertTrue(etag.startsWith("\"") && etag.endsWith("\""), "ETag 는 큰따옴표로 감싼 값이다: $etag")
+    }
+
+    private fun etagOf(result: PhotoReadResult): String {
+        assertTrue(result is PhotoReadResult.Found, "actual=$result")
+        return (result as PhotoReadResult.Found).etag
     }
 
     /**
@@ -503,7 +748,7 @@ class VerificationServiceTest {
 
         val result = service.readPhoto(OPPONENT, CHALLENGE_ID, VerificationParty.CHALLENGER)
 
-        assertEquals(PhotoReadResult.Found(JPEG, "image/jpeg"), result)
+        assertEquals(PhotoReadResult.Found(JPEG, "image/jpeg", etagOf(result)), result)
     }
 
     /**
@@ -540,10 +785,34 @@ private class FakePhotoStorage : PhotoStorage {
         return key
     }
 
+    /** 삭제된 key 를 **순서대로** 기록한다 — 교체가 지운 것이 이전 key 하나임을 단언하려고 있다. */
+    val deleted = mutableListOf<String>()
+
+    /** `true` 면 [delete] 가 던진다. 삭제 실패가 교체를 실패시키지 않는지 보는 데 쓴다. */
+    var failDelete = false
+
     override fun read(key: String): ByteArray? = stored[key]?.copyOf()
 
     override fun delete(key: String) {
+        if (failDelete) throw IllegalStateException("삭제 실패 시뮬레이션: $key")
+        deleted += key
         stored -= key
+    }
+}
+
+/**
+ * 앞으로 흐를 수 있는 [Clock].
+ *
+ * `Clock.fixed` 로는 *"교체가 `verified_at` 을 갱신했다"* 와 *"안 건드렸다"* 가 같은 값을 내서
+ * 구분되지 않는다. 기본 동작은 고정 시계와 같고, [advanceMinutes] 를 부른 테스트만 달라진다.
+ */
+private class MutableClock(private var current: Instant, private val zone: ZoneId) : Clock() {
+    override fun getZone(): ZoneId = zone
+    override fun withZone(zone: ZoneId): Clock = MutableClock(current, zone)
+    override fun instant(): Instant = current
+
+    fun advanceMinutes(minutes: Long) {
+        current = current.plusSeconds(minutes * 60)
     }
 }
 

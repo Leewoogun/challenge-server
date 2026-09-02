@@ -13,6 +13,7 @@ import com.lwg.challenge.service.verification.VerificationService
 import com.lwg.challenge.service.verification.VerificationsView
 import org.hamcrest.Matchers.allOf
 import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -153,14 +154,31 @@ class VerificationControllerTest {
             .andExpect(jsonPath("$.message").value("사진을 첨부해주세요"))
     }
 
+    /**
+     * 🔴 *"이미 인증했으면 700"* 테스트는 **삭제됐다** (verification-photo-replace, 2026-09-02).
+     * 재제출이 `last-write-wins` 로 바뀌었으므로 그 테스트는 이제 **틀린 것을 지킨다.**
+     * 교체 동작 자체는 `VerificationServiceTest` 가 덮는다 — 여기 wire 모양은 첫 제출과 같다.
+     */
     @Test
-    fun `이미 인증했으면 code 700 이 나간다`() {
-        stubSubmitThrows(SnackbarException(VerificationService.MSG_ALREADY_VERIFIED))
+    fun `교체 제출도 첫 제출과 같은 모양으로 나간다`() {
+        stubSubmit(
+            Verification(
+                id = 5L,
+                challengeId = 7L,
+                userId = meId,
+                status = VerificationStatus.VERIFIED,
+                photoUrl = "7/1/beef.jpg",
+                verifiedAt = LocalDateTime.of(2026, 8, 14, 18, 4, 2),
+                createdAt = LocalDateTime.of(2026, 8, 14, 9, 5),
+            ),
+        )
 
         mockMvc.perform(multipart("/api/v1/challenges/7/verification").file(jpegPart))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.code").value(ResponseCode.SNACKBAR_ERROR))
-            .andExpect(jsonPath("$.message").value(VerificationService.MSG_ALREADY_VERIFIED))
+            .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
+            .andExpect(jsonPath("$.data.status").value("VERIFIED"))
+            // 🔴 verifiedAt 은 최종 교체 시각이다.
+            .andExpect(jsonPath("$.data.verifiedAt").value("2026-08-14 18:04:02"))
     }
 
     @Test
@@ -290,20 +308,58 @@ class VerificationControllerTest {
 
     private val photoPath = "/api/v1/challenges/7/photos/challenger"
     private val jpegBytes = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0x11)
+    private val photoETag = "\"3f2a1c0d4e5b6a7c8d9e0f1a2b3c4d5e\""
 
     /**
-     * 🔴 이 경로만 `BaseResponse` 가 아니라 **바이트 + HTTP status** 다. 사진은 재제출 거부로
-     * 불변이고 URL 에 만료가 없으므로 200 은 길게(`private, max-age=86400`) 캐시한다.
+     * 🔴 이 경로만 `BaseResponse` 가 아니라 **바이트 + HTTP status** 다.
+     *
+     * 🔴 **`max-age=86400` 은 폐기됐다** (verification-photo-replace, 2026-09-02). 그 값이 서 있던
+     * 근거는 *"사진은 재제출 거부로 불변"* 이었는데 **교체가 열리면서 전제가 사라졌다** —
+     * 길게 캐시하면 상대가 사진을 바꿔도 최대 하루 동안 옛 사진이 보인다.
      */
     @Test
-    fun `사진을 찾으면 200 과 이미지 바이트를 준다`() {
-        stubReadPhoto(PhotoReadResult.Found(jpegBytes, "image/jpeg"))
+    fun `사진을 찾으면 200 과 이미지 바이트를 주고 매번 재검증하게 한다`() {
+        stubReadPhoto(PhotoReadResult.Found(jpegBytes, "image/jpeg", photoETag))
 
         mockMvc.perform(get(photoPath))
             .andExpect(status().isOk)
             .andExpect(content().contentType("image/jpeg"))
             .andExpect(content().bytes(jpegBytes))
-            .andExpect(header().string("Cache-Control", allOf(containsString("max-age=86400"), containsString("private"))))
+            .andExpect(header().string("ETag", photoETag))
+            .andExpect(header().string("Cache-Control", allOf(containsString("no-cache"), containsString("private"))))
+            // 🔴 max-age 가 다시 들어오면 교체된 사진이 그 기간만큼 안 보인다.
+            .andExpect(header().string("Cache-Control", not(containsString("max-age=86400"))))
+    }
+
+    /** 안 바뀌었으면 **304 + 바디 0바이트** — 재진입 비용은 그대로 싸다. */
+    @Test
+    fun `If-None-Match 가 현재 ETag 면 304 에 바디가 없다`() {
+        stubReadPhoto(PhotoReadResult.Found(jpegBytes, "image/jpeg", photoETag))
+
+        mockMvc.perform(get(photoPath).header("If-None-Match", photoETag))
+            .andExpect(status().isNotModified)
+            .andExpect(content().bytes(ByteArray(0)))
+            .andExpect(header().string("ETag", photoETag))
+    }
+
+    /** 🔴 교체 뒤에는 앱이 들고 있는 옛 ETag 가 더는 맞지 않는다 — **새 바이트가 나가야 한다.** */
+    @Test
+    fun `If-None-Match 가 옛 ETag 면 새 바이트가 나간다`() {
+        stubReadPhoto(PhotoReadResult.Found(jpegBytes, "image/jpeg", photoETag))
+
+        mockMvc.perform(get(photoPath).header("If-None-Match", "\"00000000000000000000000000000000\""))
+            .andExpect(status().isOk)
+            .andExpect(content().bytes(jpegBytes))
+            .andExpect(header().string("ETag", photoETag))
+    }
+
+    /** 중간 캐시가 약한 검증자(`W/`)나 목록으로 바꿔 보내도 같은 사진이면 304 다. */
+    @Test
+    fun `약한 검증자와 목록 형태의 If-None-Match 도 받아들인다`() {
+        stubReadPhoto(PhotoReadResult.Found(jpegBytes, "image/jpeg", photoETag))
+
+        mockMvc.perform(get(photoPath).header("If-None-Match", "\"deadbeef\", W/$photoETag"))
+            .andExpect(status().isNotModified)
     }
 
     /** 실패는 **바디 없이 status 로만** 답한다 — JSON 바디가 나가면 앱 이미지 로더가 깨진다. */
@@ -346,7 +402,7 @@ class VerificationControllerTest {
     /** 실제 프로덕션 동작 — party 매칭은 `ignoreCase = true` 다. 대문자도 통과한다. */
     @Test
     fun `party 는 대소문자를 가리지 않는다`() {
-        stubReadPhoto(PhotoReadResult.Found(jpegBytes, "image/jpeg"))
+        stubReadPhoto(PhotoReadResult.Found(jpegBytes, "image/jpeg", photoETag))
 
         mockMvc.perform(get("/api/v1/challenges/7/photos/CHALLENGER"))
             .andExpect(status().isOk)
