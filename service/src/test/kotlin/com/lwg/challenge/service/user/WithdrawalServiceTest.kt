@@ -159,6 +159,7 @@ class WithdrawalServiceTest {
                 result = null,
                 createdAt = CREATED_AT,
                 completedAt = if (status == ChallengeStatus.COMPLETED) NOW else null,
+                forfeitedBy = null,
             ),
         )
     }
@@ -598,6 +599,8 @@ private class RecordingChallengeRepository : ChallengeRepository {
     }
 
     override fun findById(id: Long): Challenge? = store[id]
+    /** 잠금은 흉내낼 수 없다 — 이 fake 로는 동시성이 검증되지 않는다 (JudgementFakes KDoc). */
+    override fun findByIdForUpdate(id: Long): Challenge? = findById(id)
 
     override fun findActiveByUser(userId: Long, statuses: Collection<ChallengeStatus>): List<Challenge> = emptyList()
     override fun findRecentlyCompletedByUser(userId: Long, since: LocalDateTime): List<Challenge> = emptyList()

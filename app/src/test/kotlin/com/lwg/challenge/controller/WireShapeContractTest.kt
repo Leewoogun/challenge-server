@@ -22,6 +22,8 @@ import com.lwg.challenge.controller.challenge.dto.ChallengeStatusData
 import com.lwg.challenge.controller.challenge.dto.ChallengeVerificationsData
 import com.lwg.challenge.controller.challenge.dto.ChallengeVerificationsResponse
 import com.lwg.challenge.controller.challenge.dto.ContractDto
+import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeData
+import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeResponse
 import com.lwg.challenge.controller.challenge.dto.PartyDto
 import com.lwg.challenge.controller.challenge.dto.PartyVerificationDto
 import com.lwg.challenge.controller.challenge.dto.SubmitVerificationData
@@ -631,7 +633,7 @@ class WireShapeContractTest {
         val data = dataOf(ChallengeDetailResponse(detailData()))
         assertKeys(
             setOf(
-                "challengeId", "status", "result", "challengeDate", "deadline",
+                "challengeId", "status", "result", "forfeitedBy", "challengeDate", "deadline",
                 "betContent", "challenger", "opponent", "contract",
             ),
             data,
@@ -667,7 +669,7 @@ class WireShapeContractTest {
         )
         assertKeys(
             setOf(
-                "challengeId", "status", "result", "challengeDate", "deadline",
+                "challengeId", "status", "result", "forfeitedBy", "challengeDate", "deadline",
                 "betContent", "challenger", "opponent", "contract",
             ),
             data,
@@ -678,6 +680,39 @@ class WireShapeContractTest {
         // [detailData] 는 IN_PROGRESS 라 result 가 null 이다 — 상세에서도 **대부분의 응답이
         // null 인 필드**이므로 여기서 키 존재를 못박는다 (계약 §1: status != COMPLETED ⇒ 항상 null).
         assertTrue(data.path("result").isNull, "result 키가 있고 값이 null 이어야 한다")
+        // 기권 없는 챌린지가 압도적 다수라 이 키도 거의 항상 null 이다 (challenge-forfeit).
+        // 키가 사라지면 앱은 "기권 없음" 과 "필드 자체가 없음" 을 구별하지 못한다.
+        assertTrue(data.path("forfeitedBy").isNull, "forfeitedBy 키가 있고 값이 null 이어야 한다")
+    }
+
+    /**
+     * 기권 응답 5필드 (challenge-forfeit 계약 §1).
+     *
+     * 🔴 `myResult` 는 오늘 **항상 `LOSE`** 라 *"상수를 왜 보내나"* 라는 말이 나올 수 있는 필드다.
+     * 지우면 앱이 `result` 를 역할로 뒤집거나 *"기권했으니 졌다"* 를 앱에 심게 되고, 그게
+     * `challenge-result` 가 `myResult` 를 신설하며 막았던 사본이다 — **지우지 마라.**
+     */
+    @Test
+    fun `ForfeitChallengeResponse - 기권 확정 5필드`() {
+        val data = dataOf(
+            ForfeitChallengeResponse(
+                ForfeitChallengeData(
+                    challengeId = 1001L,
+                    status = ChallengeStatus.COMPLETED,
+                    result = ChallengeResult.OPPONENT_WIN,
+                    myResult = Outcome.LOSE,
+                    completedAt = LocalDateTime.of(2026, 9, 5, 14, 23, 11),
+                ),
+            ),
+        )
+        assertKeys(
+            setOf("challengeId", "status", "result", "myResult", "completedAt"),
+            data,
+            "ForfeitChallengeData",
+        )
+        // ADR-0010 — `T` 도 `Z` 도 오프셋도 밀리초도 없다. 모바일 파서가 `T` 를 받으면 실패한다.
+        assertEquals("2026-09-05 14:23:11", data.path("completedAt").asText(), "completedAt 표기")
+        assertEquals("COMPLETED", data.path("status").asText(), "기권은 즉시 확정이다")
     }
 
     // ─── verification (challenge-verification) ───────────────────
@@ -793,6 +828,8 @@ class WireShapeContractTest {
         status = ChallengeStatus.IN_PROGRESS,
         // IN_PROGRESS 이므로 null 이다 — `status == COMPLETED ⟺ result != null` (계약 §1).
         result = null,
+        // 기권 없이 진행 중이다 — null 이어도 키는 나간다 (challenge-forfeit).
+        forfeitedBy = null,
         challengeDate = "2026-08-03",
         deadline = LocalDateTime.of(2026, 8, 4, 0, 0),
         betContent = "커피 사기",

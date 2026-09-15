@@ -267,6 +267,7 @@ class ActiveChallengeServiceTest {
         result = result,
         createdAt = now.minusDays(10),
         completedAt = completedAt,
+        forfeitedBy = null,
     )
 
     private fun inProgress(id: Long, challengerId: Long, deadline: LocalDateTime) =
@@ -324,6 +325,8 @@ class ActiveChallengeServiceTest {
         }
 
         override fun findById(id: Long): Challenge? = store[id]
+        /** 잠금은 흉내낼 수 없다 — 이 fake 로는 동시성이 검증되지 않는다 (JudgementFakes KDoc). */
+        override fun findByIdForUpdate(id: Long): Challenge? = findById(id)
 
         /** 보관함 전용 — 이 테스트가 다루는 경로가 아니다 (`ChallengeHistoryServiceTest` 소관). */
         override fun findCompletedHistoryByUserInMonth(

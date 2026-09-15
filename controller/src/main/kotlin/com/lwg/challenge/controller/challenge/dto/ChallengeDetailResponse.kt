@@ -38,6 +38,22 @@ data class ChallengeDetailData(
      */
     @field:Schema(example = "CHALLENGER_WIN", nullable = true)
     val result: ChallengeResult?,
+    /**
+     * 기권한 사람의 `userId`. **null = 기권 없이 끝났거나 아직 안 끝났다** (challenge-forfeit).
+     *
+     * ## 🔴 `Boolean` 이 아니라 userId 인 이유
+     *
+     * `forfeited: Boolean` 이면 앱은 *"누가 기권했나"* 를 알기 위해
+     * `forfeited && result == OPPONENT_WIN → challenger 가 기권` 으로 **역산**해야 한다.
+     * 그건 판정 규칙의 사본을 앱에 심는 것이고, [result] 옆에 `myResult` 를 따로 두지 않은
+     * 이 화면의 판단(양쪽을 역할 그대로 그린다)과도 어긋난다.
+     * userId 를 주면 앱은 [challenger] / [opponent] 의 `userId` 와 **비교만** 하면 된다.
+     *
+     * 🔴 값이 있으면 [status] 는 반드시 `COMPLETED` 이고 [result] 는 기권자의 **반대편 승리**다.
+     * 🔴 null 이어도 **키는 항상 나간다** (`@JsonInclude(NON_NULL)` 미설정 — #24 선례).
+     */
+    @field:Schema(example = "42", nullable = true, description = "기권한 사람의 userId. null = 기권 없음")
+    val forfeitedBy: Long?,
     @field:Schema(example = "2026-08-03")
     val challengeDate: String,
     @field:Schema(example = "2026-08-04 00:00:00", description = "KST 기준")

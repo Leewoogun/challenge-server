@@ -12,6 +12,8 @@ import com.lwg.challenge.controller.challenge.dto.ChallengeCreateData
 import com.lwg.challenge.controller.challenge.dto.ChallengeCreateResponse
 import com.lwg.challenge.controller.challenge.dto.ChallengeStatusData
 import com.lwg.challenge.controller.challenge.dto.CreateChallengeBody
+import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeData
+import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeResponse
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengeItem
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesData
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesResponse
@@ -22,6 +24,8 @@ import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.service.challenge.ChallengeCommandService
 import com.lwg.challenge.service.challenge.ChallengeDetailService
+import com.lwg.challenge.service.challenge.ChallengeForfeitService
+import com.lwg.challenge.service.challenge.ForfeitView
 import com.lwg.challenge.service.challenge.ChallengeDetailView
 import com.lwg.challenge.domain.challenge.ChallengeStatus
 import io.swagger.v3.oas.annotations.Operation
@@ -56,6 +60,7 @@ import java.time.temporal.ChronoUnit
 class ChallengeCommandController(
     private val challengeCommandService: ChallengeCommandService,
     private val challengeDetailService: ChallengeDetailService,
+    private val challengeForfeitService: ChallengeForfeitService,
 ) {
 
     @GetMapping("/challenges/{id}")
@@ -76,6 +81,7 @@ class ChallengeCommandController(
                 status = ChallengeStatus.valueOf(view.status),
                 // 역할 기준 그대로 (계약 §1). COMPLETED 가 아니면 서비스가 null 을 준다.
                 result = view.result,
+                forfeitedBy = view.forfeitedBy,
                 challengeDate = view.challengeDate,
                 deadline = view.deadline,
                 betContent = view.betContent,
@@ -190,6 +196,34 @@ class ChallengeCommandController(
             data = ChallengeStatusData(
                 challengeId = rejected.id ?: error("저장된 challenge 의 id 가 null 일 수 없습니다"),
                 status = rejected.status,
+            ),
+        )
+    }
+
+    @PostMapping("/challenges/{id}/forfeit")
+    @Operation(
+        summary = "기권 → 즉시 COMPLETED (상대 승)",
+        description = "당사자만 + IN_PROGRESS 만 + **내가 아직 인증하지 않았을 때만** 가능. " +
+            "요청 본문은 없다 — 기권자는 JWT 의 주체다. " +
+            "성공하면 자정 배치를 기다리지 않고 그 자리에서 판정·전적 집계까지 끝난다. " +
+            "🔴 상대의 인증 여부와 무관하게 상대가 이긴다 (기권은 \"상대에게 승리를 준다\" 는 선언이다). " +
+            "🔴 되돌릴 수 없고 멱등도 아니다 — 두 번째 요청은 COMPLETED 라 code 705 로 거부된다.",
+    )
+    @SecurityRequirement(name = "bearerAuth")
+    fun forfeit(
+        @PathVariable("id") id: Long,
+    ): ForfeitChallengeResponse {
+        val me = currentUserId()
+        val view: ForfeitView = challengeForfeitService.forfeit(me = me, challengeId = id)
+        return ForfeitChallengeResponse(
+            data = ForfeitChallengeData(
+                challengeId = view.challengeId,
+                status = view.status,
+                result = view.result,
+                myResult = view.myResult,
+                // 판정 시각은 Clock 에서 나노초가 붙는다. 계약이 밀리초·나노초를 금지하므로
+                // 다른 응답과 같은 자리에서 초 단위로 절삭한다.
+                completedAt = view.completedAt.truncatedTo(ChronoUnit.SECONDS),
             ),
         )
     }

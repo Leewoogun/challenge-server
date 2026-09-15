@@ -7,6 +7,7 @@ import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.service.challenge.ChallengeCommandService
 import com.lwg.challenge.service.challenge.ChallengeDetailService
+import com.lwg.challenge.service.challenge.ChallengeForfeitService
 import com.lwg.challenge.service.challenge.ChallengeDetailView
 import com.lwg.challenge.service.challenge.ContractView
 import com.lwg.challenge.service.challenge.PartyView
@@ -65,6 +66,10 @@ class ChallengeDetailControllerTest {
     /** 같은 컨트롤러가 주입받으므로 슬라이스 컨텍스트 로드에 필요. */
     @MockitoBean
     lateinit var challengeCommandService: ChallengeCommandService
+
+    /** challenge-forfeit 로 같은 컨트롤러가 하나 더 주입받는다. 컨텍스트 로드용. */
+    @MockitoBean
+    lateinit var challengeForfeitService: ChallengeForfeitService
 
     private val meId = 42L
 
@@ -239,6 +244,44 @@ class ChallengeDetailControllerTest {
         )
     }
 
+    /**
+     * 🔴 **`forfeitedBy` 는 userId 로 나가고, 기권이 없으면 키가 남은 채 null 이다**
+     * (challenge-forfeit 계약 §2).
+     *
+     * 불리언이 아니어야 하는 이유가 이 응답에 그대로 걸려 있다 — 앱은 이 값을
+     * `challenger.userId` / `opponent.userId` 와 **비교만** 하면 *"누가 기권했나"* 를 안다.
+     * 불리언이면 `result` 로 역산해야 하고, 그건 판정 규칙의 사본을 앱에 심는 것이다.
+     */
+    @Test
+    fun `기권으로 끝난 챌린지는 forfeitedBy 에 기권자 userId 가 나가고 아니면 키 존재 + null 이다`() {
+        Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(
+            fullView().copy(
+                status = "COMPLETED",
+                result = ChallengeResult.OPPONENT_WIN,
+                // challenger(1) 가 기권했다 — 그래서 result 가 OPPONENT_WIN 이다.
+                forfeitedBy = 1L,
+            ),
+        )
+
+        mockMvc.perform(get("/api/v1/challenges/7"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.result").value("OPPONENT_WIN"))
+            .andExpect(jsonPath("$.data.forfeitedBy").value(1))
+            .andExpect(jsonPath("$.data.challenger.userId").value(1))
+
+        // 기권 없이 진행 중 — 키는 남고 값만 null 이다 (#24 와 같은 축).
+        Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(fullView())
+
+        val body = mockMvc.perform(get("/api/v1/challenges/7"))
+            .andExpect(status().isOk)
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(
+            body.contains(""""forfeitedBy":null"""),
+            "키가 빠지면 앱이 '기권 없음' 과 '필드 자체가 없음' 을 구별하지 못한다. actual=$body",
+        )
+    }
+
     // ─── 4. 에러 ─────────────────────────────────────────────────
 
     @Test
@@ -272,6 +315,7 @@ class ChallengeDetailControllerTest {
         status = "IN_PROGRESS",
         // IN_PROGRESS 라 null 이다 — 판정된 케이스는 `completedView()` 가 따로 만든다.
         result = null,
+        forfeitedBy = null,
         challengeDate = "2026-08-03",
         deadline = LocalDateTime.of(2026, 8, 4, 0, 0, 0),
         betContent = "커피 사기",

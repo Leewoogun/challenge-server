@@ -25,6 +25,25 @@ package com.lwg.challenge.domain.challenge
 enum class Outcome { WIN, LOSE, DRAW, BOTH_LOSE }
 
 /**
+ * 기권한 사람의 **역할** (challenge-forfeit T-B1).
+ *
+ * ## 🔴 `:service` 의 `VerificationParty` 를 재사용하지 마라
+ *
+ * 이름도 값도 같지만(`CHALLENGER`/`OPPONENT`) 그건 `VerificationService.kt` 안, 즉 **`:service`
+ * 모듈**에 있다. [ChallengeVerdict] 는 `:domain:model` 이라 그걸 참조하는 순간 **도메인이
+ * 서비스에 의존하게 되어 방향이 뒤집힌다.** 값이 겹치는 것은 비용이 아니라, 판정 규칙이 인증
+ * 서비스의 사정과 무관하게 서 있다는 증거다 — 한쪽이 party 를 늘려도 다른 쪽이 안 흔들린다.
+ *
+ * ## 🔴 `userId` 가 아니라 역할인 이유
+ *
+ * [ChallengeVerdict] KDoc 의 *"환산 책임을 호출부에 둔다"* 를 그대로 따른다. 이 enum 은
+ * `challenges.forfeited_by`(userId) 를 **호출부가 이미 환산한** 결과이고, 이 함수는 환산된
+ * 값만 본다. userId 를 받으면 판정 함수가 challengerId/opponentId 까지 알아야 하고,
+ * 그 순간 순수 함수가 아니게 된다.
+ */
+enum class Forfeit { CHALLENGER, OPPONENT }
+
+/**
  * 챌린지 판정 규칙 (기획 §2.6 / 계약 §3.1).
  *
  * ## 🔴 이 프로젝트에서 판정 규칙이 존재하는 **유일한 곳**이다
@@ -40,24 +59,54 @@ enum class Outcome { WIN, LOSE, DRAW, BOTH_LOSE }
  * 그리고 **row 자체가 없는 경우**까지. 여기서 `VerificationStatus` 를 받지 않고 `Boolean` 을
  * 받는 이유가 그것이다: row 부재는 enum 으로 표현할 수 없으므로, 환산 책임을 호출부에 두고
  * 이 함수는 이미 환산된 두 진리값만 본다.
+ *
+ * ## 🔴 기권은 **여기에 들어왔다** (challenge-forfeit, 2026-09-05)
+ *
+ * 기권은 위 KDoc 이 경계하던 *"두 번째 호출부"* 그 자체다 — 자정 배치가 아닌 경로에서 승패가
+ * 정해진다. 그래서 [decide] 에 [Forfeit] 파라미터를 **늘렸다.** 시그니처가 넓어지는 대가를
+ * 치른 이유는, 그 대가를 치르는 자리가 **규칙이 사는 이 한 곳**이라 사본이 생기지 않기 때문이다.
+ * 기권 판정을 서비스 쪽 `when` 으로 빼면 그 순간 배치와 기권이 서로 다른 규칙을 갖는다.
  */
 object ChallengeVerdict {
 
     /**
-     * 두 인증 여부로 역할 기준 결과를 정한다.
+     * 기권 여부와 두 인증 여부로 역할 기준 결과를 정한다.
      *
-     * | challenger | opponent | result |
-     * |---|---|---|
-     * | 인증 | 인증 | [ChallengeResult.DRAW] |
-     * | 인증 | 미인증 | [ChallengeResult.CHALLENGER_WIN] |
-     * | 미인증 | 인증 | [ChallengeResult.OPPONENT_WIN] |
-     * | 미인증 | 미인증 | [ChallengeResult.BOTH_LOSE] |
+     * ## 🔴 기권이 **가장 먼저** 걸린다 — 인증 여부를 보지 않는다
+     *
+     * | forfeit | challenger | opponent | result |
+     * |---|---|---|---|
+     * | [Forfeit.CHALLENGER] | **무관** | **무관** | [ChallengeResult.OPPONENT_WIN] |
+     * | [Forfeit.OPPONENT] | **무관** | **무관** | [ChallengeResult.CHALLENGER_WIN] |
+     * | `null` | 인증 | 인증 | [ChallengeResult.DRAW] |
+     * | `null` | 인증 | 미인증 | [ChallengeResult.CHALLENGER_WIN] |
+     * | `null` | 미인증 | 인증 | [ChallengeResult.OPPONENT_WIN] |
+     * | `null` | 미인증 | 미인증 | [ChallengeResult.BOTH_LOSE] |
+     *
+     * 🔑 **앞 두 행의 "무관" 이 이 feature 의 전부다.** 기권자와 **상대가 둘 다 미인증**이어도
+     * 상대가 이긴다 — 아래 4행의 규칙만 있었다면 그 자리는 [ChallengeResult.BOTH_LOSE] 였다.
+     * 사용자 결정(2026-09-05): 기권은 *"나는 인증 안 한 것으로 친다"* 가 아니라
+     * **"상대에게 승리를 준다"** 는 선언이다. 그래서 인증 상태보다 위에 선다.
+     *
+     * 🔴 **뒤 4행은 한 글자도 바뀌지 않았다** (기획 §2.6). 기권은 기존 규칙을 고친 것이 아니라
+     * 그 **앞에 붙은 별도 규칙**이다. 4행을 손대는 변경은 이 feature 의 범위가 아니다.
      *
      * 🔴 **양측 인증이 `DRAW` 인 것은 의도다.** 둘 다 미션을 지켰는데 한쪽을 이기게 만들려면
      * 인증 시각·사진 품질 같은 서버가 판단할 수 없는 기준이 필요하다. 기획 원안(§2.6) 그대로
      * 무승부로 둔다.
+     *
+     * @param forfeit 기권한 **역할**. `null` = **기권 없음**(자정 배치가 부르는 정상 경로).
+     *   기본값을 주지 않은 것은 의도다 — 기본값이 있으면 새 호출부가 기권 판정을 **조용히
+     *   빠뜨린 채** 컴파일된다. 넘기기 싫어도 `null` 을 명시하게 만든다.
      */
-    fun decide(challengerVerified: Boolean, opponentVerified: Boolean): ChallengeResult = when {
+    fun decide(
+        challengerVerified: Boolean,
+        opponentVerified: Boolean,
+        forfeit: Forfeit?,
+    ): ChallengeResult = when {
+        // 🔴 인증 여부보다 먼저다. 순서를 내리면 "상대도 미인증인데 상대 승" 이 깨진다.
+        forfeit == Forfeit.CHALLENGER -> ChallengeResult.OPPONENT_WIN
+        forfeit == Forfeit.OPPONENT -> ChallengeResult.CHALLENGER_WIN
         challengerVerified && opponentVerified -> ChallengeResult.DRAW
         challengerVerified -> ChallengeResult.CHALLENGER_WIN
         opponentVerified -> ChallengeResult.OPPONENT_WIN

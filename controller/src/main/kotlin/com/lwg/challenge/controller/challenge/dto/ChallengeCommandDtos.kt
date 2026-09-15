@@ -3,7 +3,9 @@ package com.lwg.challenge.controller.challenge.dto
 import com.fasterxml.jackson.annotation.JsonFormat
 import com.lwg.challenge.controller.common.BaseResponse
 import com.lwg.challenge.core.challenge.DeadlineType
+import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.challenge.ChallengeStatus
+import com.lwg.challenge.domain.challenge.Outcome
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.Positive
@@ -178,4 +180,52 @@ data class CancelChallengeResponse(
 data class CancelChallengeData(
     @field:Schema(example = "7")
     val challengeId: Long,
+)
+
+// ─── 6. POST /api/v1/challenges/{id}/forfeit ─────────────────────
+
+/**
+ * 기권 응답 (challenge-forfeit 계약 §1).
+ *
+ * 🔴 **요청 본문이 없다.** 기권자는 JWT 의 주체다 — `userId` 를 body 나 쿼리로 받으면
+ * **남의 챌린지를 기권시킬 수 있는 문**이 열린다. 그래서 이 파일에 `ForfeitChallengeBody` 가
+ * 없는 것이 의도다. 만들지 마라.
+ */
+@Schema(description = "기권 응답 — 챌린지가 즉시 종료되고 결과가 확정된다")
+data class ForfeitChallengeResponse(
+    val data: ForfeitChallengeData,
+) : BaseResponse()
+
+@Schema(description = "기권으로 확정된 결과")
+data class ForfeitChallengeData(
+    @field:Schema(example = "7")
+    val challengeId: Long,
+
+    /** 항상 `COMPLETED`. 기권은 자정 배치를 기다리지 않는다. */
+    @field:Schema(example = "COMPLETED", description = "항상 COMPLETED — 기권은 즉시 확정이다")
+    val status: ChallengeStatus,
+
+    /**
+     * 판정 결과. **역할 기준**이다 — 기권자가 challenger 면 `OPPONENT_WIN`, opponent 면
+     * `CHALLENGER_WIN`. 상세(`GET /challenges/{id}`)의 `result` 와 같은 축이다.
+     */
+    @field:Schema(example = "OPPONENT_WIN", description = "역할 기준. 기권자의 반대편이 이긴다")
+    val result: ChallengeResult,
+
+    /**
+     * **요청자(= 기권자) 시점.** 오늘 항상 `LOSE` 다.
+     *
+     * 🔴 상수처럼 보이지만 서버가 박아 넣는 값이 아니라 `ChallengeVerdict.outcomeFor` 를
+     * 실제로 태운 결과다. 빼면 앱이 `result` 를 역할로 뒤집거나 *"기권했으니 졌다"* 를
+     * 앱 안에 심어야 하고, 그게 `challenge-result` 가 `myResult` 를 신설하며 막았던 사본이다.
+     */
+    @field:Schema(example = "LOSE", description = "요청자 시점. 기권자가 부르는 API 라 항상 LOSE")
+    val myResult: Outcome,
+
+    /**
+     * 확정 시각. **기권 시각이기도 하다** — 기권은 즉시 `COMPLETED` 라 별도 컬럼이 없다(V12).
+     */
+    @field:Schema(example = "2026-09-05 14:23:11", description = "KST 기준. 기권 시각과 같다")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
+    val completedAt: LocalDateTime,
 )

@@ -104,6 +104,36 @@ interface ChallengeRepository {
     fun findById(id: Long): Challenge?
 
     /**
+     * id 로 단건 조회 + **행 잠금** (`PESSIMISTIC_WRITE`). 없으면 null. **기권 전용.**
+     *
+     * ⚠️ **로그에서 찾을 때는 `for no key update` 로 검색해라.** Hibernate 6 의 PostgreSQL
+     * 방언이 `PESSIMISTIC_WRITE` 를 그렇게 렌더한다(2026-09-05 실구동 로그 실측) —
+     * `for update` 로 grep 하면 **0건이 나오고, 잠금이 안 걸린 줄로 오해하게 된다.**
+     * 두 잠금 모드는 서로 충돌하므로 동시 기권을 직렬화하는 목적에는 차이가 없다.
+     *
+     * ## 🔴 왜 기권만 잠그는가 — 여기만 두 사람이 같은 row 를 동시에 노린다
+     *
+     * 기권은 **양쪽 당사자 모두가 부를 수 있는 유일한 상태 전이**다. 수락·거절은 opponent 만,
+     * 취소는 challenger 만 부를 수 있어 요청자가 애초에 한 명이다. 판정 배치는 단일 스레드다.
+     *
+     * 잠금 없이 두면 이렇게 깨진다 — READ COMMITTED 에서 두 트랜잭션이 **둘 다** `IN_PROGRESS`
+     * 를 읽고 통과한 뒤, 나중 것이 앞 것의 `forfeited_by` 와 `result` 를 **덮어쓰고 전적을
+     * 한 번 더 올린다.** `total_challenges` 는 소급 정정이 불가능하다.
+     *
+     * `FOR UPDATE` 로 잠그면 두 번째 트랜잭션은 첫 번째 커밋을 기다렸다가 **갱신된 row 를 다시
+     * 읽는다**(Postgres EvalPlanQual). 그때 status 가 `COMPLETED` 라 **기존 `IN_PROGRESS`
+     * 게이트가 그대로 두 번째를 막는다** — 동시성을 위한 별도 규칙이 없다는 것이 핵심이다.
+     *
+     * ⚠️ **읽기 경로에서 부르지 마라.** 조회에 쓰면 사용자 요청이 서로를 막기 시작한다.
+     * 상태를 전이시키는 트랜잭션의 **첫 문장**으로만 쓴다 (그래야 잠금 순서가 하나로 고정된다).
+     *
+     * ⚠️ 배치 판정(`findDueByStatus` → `judge`)은 이 잠금을 타지 않는다. 배치와 기권이 같은
+     * row 에서 정확히 겹치는 구간은 여전히 열려 있고, 그건 `judge` 자신의 `IN_PROGRESS`
+     * 재확인이 트랜잭션 안에서 막는 범위까지다 (`ChallengeJudgementService` KDoc).
+     */
+    fun findByIdForUpdate(id: Long): Challenge?
+
+    /**
      * 받은 도전장 목록 — 내가 `opponent` 인 `PENDING` 챌린지 중 **마감이 지나지 않은 것**.
      *
      * `created_at DESC` 정렬. 챌린저 정보(닉네임/프로필)를 users JOIN 으로 함께 가져와 N+1 을 피한다.

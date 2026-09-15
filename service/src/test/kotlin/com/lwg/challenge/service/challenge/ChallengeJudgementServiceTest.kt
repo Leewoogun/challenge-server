@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
@@ -81,6 +82,7 @@ class ChallengeJudgementServiceTest {
         result = result,
         createdAt = LocalDateTime.of(2026, 8, 24, 9, 0),
         completedAt = null,
+        forfeitedBy = null,
     )
 
     private fun seedVerification(userId: Long, status: VerificationStatus) {
@@ -408,4 +410,46 @@ class ChallengeJudgementServiceTest {
     fun `없는 챌린지 만료는 false 다`() {
         assertFalse(service.expire(12345L))
     }
+
+    // ─── 기권 (challenge-forfeit T-B1·T-B3) ──────────────────────
+
+    /**
+     * 🔴 **판정은 `forfeited_by` 를 읽는다** — 배치가 소급 판정할 때도 같은 코드를 탄다.
+     *
+     * 기권 경로 전체는 [ChallengeForfeitServiceTest] 가 본다. 여기서 따로 보는 이유는
+     * *"`judge()` 자체가 기권을 안다"* 는 것이 **두 경로가 갈릴 수 없는 근거**이기 때문이다.
+     * 기권 판정을 `ChallengeForfeitService` 안으로 옮기면 이 테스트만 깨진다 — 그게 이 테스트의 값이다.
+     */
+    @Test
+    fun `forfeited_by 가 있으면 인증 여부와 무관하게 반대편이 이긴다`() {
+        challenges.put(challenge(ChallengeStatus.IN_PROGRESS).copy(forfeitedBy = CHALLENGER))
+        // 🔴 양쪽 다 미인증 — 기권이 없었다면 BOTH_LOSE 다.
+        seedVerification(CHALLENGER, VerificationStatus.PENDING)
+        seedVerification(OPPONENT, VerificationStatus.PENDING)
+
+        assertTrue(service.judge(CHALLENGE_ID))
+
+        assertEquals(ChallengeResult.OPPONENT_WIN, judged().result)
+        assertEquals(1, userRecords.findByUserId(OPPONENT)!!.wins)
+        assertEquals(1, userRecords.findByUserId(CHALLENGER)!!.losses)
+    }
+
+    /**
+     * 🔴 **당사자가 아닌 기권자는 조용히 무시하지 않고 터뜨린다.**
+     *
+     * 정상 경로에서는 도달할 수 없다 — `ChallengeForfeitService` 가 당사자 검증을 통과한
+     * 요청자만 이 컬럼에 쓴다. 그래도 `null` 로 떨어뜨리지 않는 이유는, 그렇게 하면
+     * **깨진 데이터가 "기권이 없던 것" 으로 판정되어 잘못된 승패로 덮이기** 때문이다.
+     * 승패는 소급 정정이 불가능하므로 조용한 오답보다 시끄러운 실패가 낫다.
+     * (배치는 건별로 예외를 세고 넘어가므로 한 건이 나머지를 막지 않는다 — Runner KDoc.)
+     */
+    @Test
+    fun `당사자가 아닌 사람이 기권자로 기록돼 있으면 판정이 터진다`() {
+        challenges.put(challenge(ChallengeStatus.IN_PROGRESS).copy(forfeitedBy = 999L))
+
+        assertThrows<IllegalStateException> { service.judge(CHALLENGE_ID) }
+
+        assertTrue(userRecords.all().isEmpty(), "전적이 쌓이면 안 된다")
+    }
+
 }

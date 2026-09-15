@@ -50,6 +50,7 @@ class ChallengeDetailService(
             // 도메인 값을 그대로 흘린다. COMPLETED 가 아니면 null 이라는 불변식은 판정 배치가
             // 세우는 것이고(Challenge KDoc), 여기서 다시 검사하면 규칙이 두 곳에 살게 된다.
             result = challenge.result,
+            forfeitedBy = challenge.forfeitedBy,
             challengeDate = challenge.challengeDate.toString(),
             deadline = challenge.deadline,
             betContent = challenge.betContent,
@@ -96,6 +97,14 @@ data class ChallengeDetailView(
      * 주고 있어서(위 KDoc), result 만 "내 시점" 으로 바꾸면 **같은 응답 안에 두 기준이 섞인다.**
      */
     val result: ChallengeResult?,
+    /**
+     * 기권한 사람의 userId. **null = 기권 없이 끝났거나 아직 안 끝났다** (challenge-forfeit).
+     *
+     * 🔴 `Boolean` 이 아닌 이유: 불리언이면 앱이 *"누가 기권했나"* 를
+     * `forfeited && result == OPPONENT_WIN → challenger 가 기권` 으로 **역산**해야 하고,
+     * 그건 판정 규칙의 사본을 앱에 심는 것이다. userId 면 [PartyView.userId] 와 **비교만** 하면 된다.
+     */
+    val forfeitedBy: Long?,
     val challengeDate: String,
     val deadline: LocalDateTime,
     val betContent: String,

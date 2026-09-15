@@ -51,16 +51,22 @@ class NotificationTypeTest {
     }
 
     /**
-     * V8__notification_type_recomment.sql 의 `COMMENT ON COLUMN notifications.type` 과 같은 목록.
+     * **최신** 마이그레이션의 `COMMENT ON COLUMN notifications.type` 과 같은 목록.
      * 한쪽만 바뀌면 여기서 실패한다 — 주석이 다시 낡는 것을 막는 장치다.
+     *
+     * ⚠️ 기준 파일은 고정이 아니다. V8 이 어휘를 처음 못박았고,
+     * **V12__challenge_forfeit.sql 이 `CHALLENGE_FORFEITED` 를 넣으며 갱신**했다.
+     * 다음에 타입을 늘리는 사람은 **그 feature 의 마이그레이션에서 다시 COMMENT 를 쓰고**
+     * 이 목록과 아래 파일명을 함께 고쳐라 — 옛 마이그레이션은 절대 수정하지 않는다.
      */
     @Test
-    fun `어휘 전체가 V8 컬럼 주석과 일치한다`() {
+    fun `어휘 전체가 V12 컬럼 주석과 일치한다`() {
         assertEquals(
             listOf(
                 "CHALLENGE_REQUEST",
                 "CHALLENGE_ACCEPTED",
                 "CHALLENGE_REJECTED",
+                "CHALLENGE_FORFEITED",
                 "REMIND",
                 "OPPONENT_VERIFIED",
                 "RESULT",
@@ -68,7 +74,25 @@ class NotificationTypeTest {
                 "FRIEND_REQUEST",
             ),
             NotificationType.entries.map { it.name },
-            "enum 을 바꿨다면 V8__notification_type_recomment.sql 의 COMMENT 도 같이 고쳐라",
+            "enum 을 바꿨다면 최신 마이그레이션(V12__challenge_forfeit.sql)의 COMMENT 도 같이 고쳐라",
+        )
+    }
+
+    /**
+     * 🔴 `notifications.type` 은 `VARCHAR(30)` 이다 — **이제 저장 경로가 있다.**
+     *
+     * 이 테스트가 없던 이유는 *"그런 일이 없었다"* 가 아니라 **enum 을 DB 에 저장하는 코드가
+     * 0건**이라는 것이었다(이 클래스 KDoc). push-fcm T-B5 에서 `NotificationDispatcher` 가
+     * enum name 을 그대로 저장하기 시작하면서 그 전제가 사라졌고, KDoc 이 *"그때 이 판단을
+     * 다시 하라"* 고 적어 뒀다. 지금 한다 — 길이 초과는 **런타임 INSERT 에서만** 터지고
+     * 컴파일도 다른 테스트도 잡지 못한다.
+     */
+    @Test
+    fun `모든 타입 이름이 컬럼 폭 30자 안에 든다`() {
+        val tooLong = NotificationType.entries.filter { it.name.length > 30 }
+        assertTrue(
+            tooLong.isEmpty(),
+            "notifications.type 은 VARCHAR(30) 이다. 초과하면 저장 시점에 터진다: $tooLong",
         )
     }
 }

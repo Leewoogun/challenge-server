@@ -467,6 +467,7 @@ class NotificationQueryServiceTest {
         result = null,
         createdAt = LocalDateTime.of(2026, 9, 1, 9, 0),
         completedAt = null,
+        forfeitedBy = null,
     )
 
     private fun put(
@@ -611,6 +612,9 @@ class NotificationQueryServiceTest {
 
         /** 🔴 행마다 단건 조회로 되돌아가는 구현을 막는다 — 그게 정확히 N+1 이다. */
         override fun findById(id: Long): Challenge? = error("배치 조회 대신 단건 조회를 썼다 (N+1)")
+
+        /** 알림 조회는 기권 경로가 아니다 — 부르면 그게 버그다. */
+        override fun findByIdForUpdate(id: Long): Challenge? = error("알림 조회가 기권용 잠금 조회를 썼다")
 
         override fun findReceivedPending(opponentId: Long, now: LocalDateTime): List<ReceivedChallenge> =
             error("알림 조회가 받은 도전장 목록을 읽었다 — 필요한 것은 id 집합뿐이다")

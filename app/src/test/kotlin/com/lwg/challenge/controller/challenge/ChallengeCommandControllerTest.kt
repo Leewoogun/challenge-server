@@ -4,13 +4,17 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lwg.challenge.controller.common.exception.GlobalExceptionHandler
 import com.lwg.challenge.core.challenge.DeadlineType
 import com.lwg.challenge.domain.challenge.Challenge
+import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.challenge.ChallengeStatus
+import com.lwg.challenge.domain.challenge.Outcome
 import com.lwg.challenge.domain.challenge.ReceivedChallenge
 import com.lwg.challenge.domain.common.ResponseCode
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
 import com.lwg.challenge.service.challenge.ChallengeCommandService
 import com.lwg.challenge.service.challenge.ChallengeDetailService
+import com.lwg.challenge.service.challenge.ChallengeForfeitService
+import com.lwg.challenge.service.challenge.ForfeitView
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.anyLong
@@ -64,6 +68,10 @@ class ChallengeCommandControllerTest {
     /** soul-oath 로 컨트롤러가 상세 조회 서비스도 주입받는다. 슬라이스 컨텍스트 로드에 필요. */
     @MockitoBean
     lateinit var challengeDetailService: ChallengeDetailService
+
+    /** challenge-forfeit 로 기권 서비스도 주입받는다. */
+    @MockitoBean
+    lateinit var challengeForfeitService: ChallengeForfeitService
 
     private val meId = 42L
 
@@ -398,6 +406,114 @@ class ChallengeCommandControllerTest {
             .andExpect(jsonPath("$.message").value("이미 처리된 챌린지예요"))
     }
 
+    // ─── 6. POST /challenges/{id}/forfeit (challenge-forfeit) ────
+
+    /**
+     * 🔴 응답 5필드 + **시간 표기**를 문자열 그대로 고정한다 (ADR-0010).
+     *
+     * 판정 시각은 `Clock` 에서 나노초가 붙어 오므로 컨트롤러가 초 단위로 절삭한다. 그 절삭이
+     * 빠지면 `"2026-09-05T14:23:11.123456"` 이 나가고 **모바일 커스텀 파서가 실패한다** —
+     * 관대하게 받아주지 않는 것이 양쪽 합의다.
+     */
+    @Test
+    fun `forfeit - 즉시 COMPLETED 응답 + completedAt 은 초 단위 평문이다`() {
+        Mockito.`when`(challengeForfeitService.forfeit(meId, 7L)).thenReturn(
+            ForfeitView(
+                challengeId = 7L,
+                status = ChallengeStatus.COMPLETED,
+                result = ChallengeResult.OPPONENT_WIN,
+                myResult = Outcome.LOSE,
+                // 나노초를 일부러 붙인다 — 컨트롤러가 잘라내는지 보려는 것이다.
+                completedAt = LocalDateTime.of(2026, 9, 5, 14, 23, 11, 123_456_789),
+            ),
+        )
+
+        mockMvc.perform(post("/api/v1/challenges/7/forfeit"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.error").value(false))
+            .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
+            .andExpect(jsonPath("$.data.challengeId").value(7))
+            .andExpect(jsonPath("$.data.status").value("COMPLETED"))
+            .andExpect(jsonPath("$.data.result").value("OPPONENT_WIN"))
+            .andExpect(jsonPath("$.data.myResult").value("LOSE"))
+            .andExpect(jsonPath("$.data.completedAt").value("2026-09-05 14:23:11"))
+    }
+
+    /** 상대가 기권했을 때의 반대 방향. `result` 만 뒤집히고 `myResult` 는 여전히 요청자 시점이다. */
+    @Test
+    fun `forfeit - opponent 가 기권하면 result 는 CHALLENGER_WIN 이고 myResult 는 그대로 LOSE 다`() {
+        Mockito.`when`(challengeForfeitService.forfeit(meId, 7L)).thenReturn(
+            ForfeitView(
+                challengeId = 7L,
+                status = ChallengeStatus.COMPLETED,
+                result = ChallengeResult.CHALLENGER_WIN,
+                myResult = Outcome.LOSE,
+                completedAt = LocalDateTime.of(2026, 9, 5, 14, 23, 11),
+            ),
+        )
+
+        mockMvc.perform(post("/api/v1/challenges/7/forfeit"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.result").value("CHALLENGER_WIN"))
+            .andExpect(jsonPath("$.data.myResult").value("LOSE"))
+    }
+
+    /**
+     * 🔴 **거부 코드가 705 다** — 계약 초안(700)에서 바꾼 지점이라 wire 로 잠근다 (계약 §4 협의 이력).
+     *
+     * 근거: 같은 문장(`"챌린지를 찾을 수 없어요"`)이 상세·취소·인증에서 이미 705 로 나간다.
+     * 기권만 700 이면 **같은 사실이 화면마다 다른 UI 로** 뜬다.
+     */
+    @Test
+    fun `forfeit - 없는 챌린지는 code 705`() {
+        Mockito.`when`(challengeForfeitService.forfeit(anyLong(), anyLong()))
+            .thenThrow(OneButtonDialogException(ChallengeForfeitService.MSG_NOT_FOUND))
+
+        mockMvc.perform(post("/api/v1/challenges/999/forfeit"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.code").value(ResponseCode.ONE_BUTTON_DIALOG_ERROR))
+            .andExpect(jsonPath("$.message").value("챌린지를 찾을 수 없어요"))
+    }
+
+    @Test
+    fun `forfeit - 진행 중이 아니면 code 705`() {
+        Mockito.`when`(challengeForfeitService.forfeit(anyLong(), anyLong()))
+            .thenThrow(OneButtonDialogException(ChallengeForfeitService.MSG_NOT_IN_PROGRESS))
+
+        mockMvc.perform(post("/api/v1/challenges/7/forfeit"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.code").value(ResponseCode.ONE_BUTTON_DIALOG_ERROR))
+            .andExpect(jsonPath("$.message").value("진행 중인 챌린지만 기권할 수 있어요"))
+    }
+
+    /**
+     * 🔴 이미 인증한 사람의 기권도 **705** 다. 인증은 무를 수 없으므로 사용자가 고칠 것이
+     * 없고, 이 응답이 나갔다는 건 **기권 진입점이 남아 있는 낡은 화면**이라는 뜻이다.
+     * (spec §3 은 이 항목을 `code=700` 으로 적었다 — 계약 §4 협의 이력에서 개정.)
+     */
+    @Test
+    fun `forfeit - 이미 인증했으면 code 705`() {
+        Mockito.`when`(challengeForfeitService.forfeit(anyLong(), anyLong()))
+            .thenThrow(OneButtonDialogException(ChallengeForfeitService.MSG_ALREADY_VERIFIED))
+
+        mockMvc.perform(post("/api/v1/challenges/7/forfeit"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.code").value(ResponseCode.ONE_BUTTON_DIALOG_ERROR))
+            .andExpect(jsonPath("$.message").value("이미 인증해서 기권할 수 없어요"))
+    }
+
+    /** 당사자가 아닌 것은 **권한** 문제라 700 이다 — 위 세 건과 축이 다르다. */
+    @Test
+    fun `forfeit - 당사자가 아니면 code 700`() {
+        Mockito.`when`(challengeForfeitService.forfeit(anyLong(), anyLong()))
+            .thenThrow(SnackbarException(ChallengeForfeitService.MSG_NOT_MINE))
+
+        mockMvc.perform(post("/api/v1/challenges/7/forfeit"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.code").value(ResponseCode.SNACKBAR_ERROR))
+            .andExpect(jsonPath("$.message").value("내 챌린지가 아니에요"))
+    }
+
     // ─── fixtures ────────────────────────────────────────────────
 
     private fun challenge(
@@ -418,5 +534,6 @@ class ChallengeCommandControllerTest {
         result = null,
         createdAt = LocalDateTime.of(2026, 7, 28, 2, 11, 0),
         completedAt = null,
+        forfeitedBy = null,
     )
 }

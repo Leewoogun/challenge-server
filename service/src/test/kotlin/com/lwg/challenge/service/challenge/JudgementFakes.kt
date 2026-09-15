@@ -60,6 +60,16 @@ internal class FakeChallenges : ChallengeRepository {
         return store[id]
     }
 
+    /**
+     * 🔴 **잠금을 흉내내지 않는다.** [findById] 와 완전히 같다.
+     *
+     * 실제 구현은 `SELECT ... FOR UPDATE` 로 동시 기권 요청을 직렬화하는데, in-memory fake 에는
+     * 트랜잭션도 행 잠금도 없다. 그래서 이 fake 를 쓰는 테스트는 *"두 번째 요청이 IN_PROGRESS
+     * 게이트에 걸린다"* 는 **순차** 동작만 검증하고, **진짜 동시성은 검증하지 못한다.**
+     * 그 부분은 `@Lock(PESSIMISTIC_WRITE)` 어노테이션의 존재와 DB 가 보장한다.
+     */
+    override fun findByIdForUpdate(id: Long): Challenge? = findById(id)
+
     /** 실제 구현과 같은 경계(`<=`)와 정렬(deadline ASC)을 지킨다 — 어긋나면 테스트가 거짓말을 한다. */
     override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> {
         if (statuses.isEmpty()) return emptyList()

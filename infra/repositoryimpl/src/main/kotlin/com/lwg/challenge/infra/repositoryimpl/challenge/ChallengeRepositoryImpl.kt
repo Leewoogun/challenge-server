@@ -45,6 +45,10 @@ class ChallengeRepositoryImpl(
     override fun findById(id: Long): Challenge? =
         jpa.findById(id).map { it.toDomain() }.orElse(null)
 
+    /** 기권 전용 — 잠금 이유는 `ChallengeRepository.findByIdForUpdate` KDoc. */
+    override fun findByIdForUpdate(id: Long): Challenge? =
+        jpa.findByIdForUpdate(id)?.toDomain()
+
     override fun findDueByStatus(statuses: Collection<ChallengeStatus>, now: LocalDateTime): List<Challenge> {
         if (statuses.isEmpty()) return emptyList()
         return jpa.findDueByStatus(statuses.map { it.name }, now).map { it.toDomain() }

@@ -73,6 +73,7 @@ class ChallengeJudgementRunnerTest {
             result = null,
             createdAt = deadline.minusDays(1),
             completedAt = null,
+            forfeitedBy = null,
         )
         challenges.put(challenge)
         return challenge

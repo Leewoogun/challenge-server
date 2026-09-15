@@ -4,7 +4,10 @@ package com.lwg.challenge.domain.notification
  * 알림 종류. `notifications.type` (`VARCHAR(30)`) 에 **enum name 그대로** 저장된다.
  *
  * push-fcm 계약 §0.6 에서 V1__init.sql 주석의 7종을 재정의한 결과다. 실제 정정은
- * `V8__notification_type_recomment.sql` 이 `COMMENT ON COLUMN` 으로 수행한다 (DML 0건).
+ * `V8__notification_type_recomment.sql` 이 `COMMENT ON COLUMN` 으로 수행했고,
+ * `CHALLENGE_FORFEITED` 추가분은 `V12__challenge_forfeit.sql` 이 같은 방식으로 이어받는다
+ * (둘 다 DML 0건). 🔴 **어휘를 바꾸면 최신 마이그레이션의 주석도 함께 고쳐라** —
+ * [NotificationTypeTest] 가 두 목록의 일치를 고정한다.
  *
  * ## `SIGN_REQUEST` 가 없는 이유
  *
@@ -18,13 +21,14 @@ package com.lwg.challenge.domain.notification
  * 둘이 어긋나면 주석이 다시 낡는다 — 정확히 이번에 고친 문제다. [NotificationTypeTest] 가
  * 폐기된 이름 부재 + V8 주석과의 목록 일치를 고정한다.
  *
- * 참고로 컬럼은 `VARCHAR(30)` 이고 가장 긴 이름이 `CHALLENGE_ACCEPTED`(18자) 라 여유가 있다.
+ * 참고로 컬럼은 `VARCHAR(30)` 이고 가장 긴 이름이 `CHALLENGE_FORFEITED`(19자) 라 여유가 있다.
  *
  * | 타입 | 수신자 | 트리거 | 상태 |
  * |---|---|---|---|
  * | [CHALLENGE_REQUEST] | 상대 | `POST /challenges` | push-fcm 범위 |
  * | [CHALLENGE_ACCEPTED] | 신청자 | `POST /challenges/{id}/accept` | push-fcm 범위 (신규) |
  * | [CHALLENGE_REJECTED] | 신청자 | `POST /challenges/{id}/reject` | push-fcm 범위 (신규) |
+ * | [CHALLENGE_FORFEITED] | **이긴 쪽** | `POST /challenges/{id}/forfeit` | challenge-forfeit (신규) |
  * | [REMIND] | 양측 | 마감 1시간 전 배치 | 인증 feature 대기 |
  * | [OPPONENT_VERIFIED] | 상대 | 인증 제출 | 인증 feature 대기 |
  * | [RESULT] | 양측 | 자정 판정 배치 | 판정 feature 대기 |
@@ -41,6 +45,15 @@ enum class NotificationType {
 
     /** 상대가 거절했다. 수신자 = 신청자. */
     CHALLENGE_REJECTED,
+
+    /**
+     * 상대가 **기권**했다. 수신자 = **기권당한 쪽(= 이긴 쪽)**. `reference_id` = challengeId.
+     *
+     * ⚠️ 탭 목적지가 **두 경로에서 다르고, 그게 의도다** (사용자 결정 2026-09-05):
+     * 푸시 트레이는 챌린지 상세로 가고, **알림 목록 화면에서는 이동하지 않는다**
+     * (가리키는 챌린지가 `COMPLETED` 라 `referencePending = false` — notification-list 2차 규칙).
+     */
+    CHALLENGE_FORFEITED,
 
     /** 마감이 임박했다. 수신자 = 양측. 인증 feature 에서 발송이 붙는다. */
     REMIND,

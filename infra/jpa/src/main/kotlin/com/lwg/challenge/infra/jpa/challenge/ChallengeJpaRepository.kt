@@ -1,7 +1,9 @@
 package com.lwg.challenge.infra.jpa.challenge
 
 import com.lwg.challenge.infra.entity.challenge.ChallengeEntity
+import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
@@ -15,6 +17,23 @@ import java.time.LocalDateTime
  * (`ChallengeEntity` 는 users 와 association 매핑이 없다. 도메인 순수성 유지를 위해 FK 를 Long 으로만 들고 있다.)
  */
 interface ChallengeJpaRepository : JpaRepository<ChallengeEntity, Long> {
+
+    /**
+     * 잠금 단건 조회 — **기권 전용** (challenge-forfeit T-B3).
+     *
+     * ⚠️ 실제로 나가는 SQL 은 `... where ce1_0.id=? for no key update` 다 —
+     * Hibernate 6 PostgreSQL 방언의 `PESSIMISTIC_WRITE` 렌더링이다(실구동 로그 실측).
+     *
+     * 🔴 `findById` 를 오버라이드하지 않고 **다른 이름의 메서드**로 둔 것이 의도다.
+     * 오버라이드하면 이 레포의 **모든 조회가 행을 잠그게 되어** 조회끼리 서로를 막는다.
+     * 잠금이 필요한 곳만 이 이름을 부른다.
+     *
+     * 왜 잠가야 하는지는 `ChallengeRepository.findByIdForUpdate` KDoc 참조 —
+     * 양쪽 당사자가 동시에 기권을 눌렀을 때 전적이 두 번 세어지는 경로를 막는다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM ChallengeEntity c WHERE c.id = :id")
+    fun findByIdForUpdate(@Param("id") id: Long): ChallengeEntity?
 
     /**
      * 현재 사용자가 challenger 또는 opponent 이면서 status 가 주어진 집합에 속한 챌린지를

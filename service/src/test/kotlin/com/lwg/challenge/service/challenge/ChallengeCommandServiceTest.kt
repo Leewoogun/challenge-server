@@ -882,6 +882,7 @@ class ChallengeCommandServiceTest {
         result = null,
         createdAt = LocalDateTime.of(2026, 7, 28, 0, 0),
         completedAt = null,
+        forfeitedBy = null,
     )
 }
 
@@ -917,6 +918,8 @@ private class FakeChallengeRepository : ChallengeRepository {
     override fun findEarliestCompletedChallengeDate(userId: Long): LocalDate? = null
 
     override fun findById(id: Long): Challenge? = store[id]
+    /** 잠금은 흉내낼 수 없다 — 이 fake 로는 동시성이 검증되지 않는다 (JudgementFakes KDoc). */
+    override fun findByIdForUpdate(id: Long): Challenge? = findById(id)
 
     /**
      * 판정 배치 대상 선정 — 경계는 `<=` 다 (`findReceivedPending` 의 `>` 와 상보적).

@@ -10,6 +10,7 @@ package com.lwg.challenge.domain.notification
  * | `CHALLENGE_REQUEST` | ✅ **사용자 확정 (2026-08-07)** — 격식체 |
  * | `CHALLENGE_ACCEPTED` / `CHALLENGE_REJECTED` | 🟡 **초안값** — 디자인 확인 후 바뀔 수 있다 |
  * | `OPPONENT_VERIFIED` | 🟡 **초안값 (2026-08-14 추가)** — challenge-verification T-B4 |
+ * | `CHALLENGE_FORFEITED` | 🟡 **초안값 (2026-09-05 추가)** — challenge-forfeit T-B4 |
  *
  * ⚠️ **지금 네 종의 톤이 갈려 있다. 단 갈린 축은 `title` 이지 존댓말/반말이 아니다.**
  * `body` 는 **넷 다 합니다체**다 (`~하시렵니까?` / `~수락했습니다` / `~도망쳤습니다` / `~올렸습니다`).
@@ -31,12 +32,28 @@ package com.lwg.challenge.domain.notification
  * ## 저장 값과 발송 값이 같다
  *
  * `notifications.title`/`body` 에 **여기서 만든 문구를 그대로 박제**한다. 계약 오픈 이슈 2
- * ("박제 vs 목록 화면에서 재조립")에서 박제를 택한 셈인데, 근거는 이렇다:
- * - 목록 화면이 아직 없어 재조립 쪽 요구사항이 존재하지 않는다.
- * - 푸시로 이미 나간 문구와 목록에 보이는 문구가 **다르면 그게 버그로 보인다.**
+ * ("박제 vs 목록 화면에서 재조립")에서 박제를 택했고, 근거는 **푸시로 이미 나간 문구와 목록에
+ * 보이는 문구가 다르면 그게 버그로 보인다**는 것이다.
  *
  * ⚠️ 대가: 문구를 바꿔도 **과거 알림은 옛 문구 그대로 남는다.** 그게 오히려 "그때 이렇게 왔었다"에
- * 부합한다고 봤다. 목록 화면 feature 가 이 판단을 뒤집고 싶으면 그때 재검토하면 된다.
+ * 부합한다고 봤다.
+ *
+ * 🔴 **이 문단은 한때 *"목록 화면이 아직 없어 재조립 쪽 요구사항이 존재하지 않는다"* 를 첫 번째
+ * 근거로 들었다. 그 전제는 죽었다** — `notification-list` 가 개통했다(2026-09-01).
+ * 남은 근거만으로도 박제는 그대로 옳아서 **결론은 바뀌지 않았다.**
+ * (2026-09-05 challenge-forfeit 중 forfeit-mobile 문의로 발견·정정.)
+ *
+ * ## 🔴 [Message.title] 은 **푸시에서만 쓰인다** — 목록 화면은 그리지 않는다
+ *
+ * `GET /notifications` 응답에 **`title` 필드가 없다.** 컬럼도 값도 그대로 있지만 wire 에만
+ * 없는 **의도적 부재**다 (design §3.3 — 알림 카드는 `body` 단독 1행).
+ * 이유: 여기 있는 제목들(`영혼의 맹세` / `계약 완료.` / `ㅠㅠ` / `증거 도착` / `계약 파기.`)은
+ * **푸시 헤드라인으로 설계된 문구**라 트레이에서 본문과 함께 뜰 때 성립하고, 목록에 한 줄로
+ * 놓이면 무슨 일인지 말하지 못한다.
+ *
+ * 🔴 **그러니 새 문구를 정할 때 제목이 목록에 보일 거라고 가정하지 마라.** 사용자가 목록에서
+ * 읽는 것은 [Message.body] 뿐이고, **본문 혼자서 무슨 일인지 말해야 한다.**
+ * (`NotificationListResponse` / `NotificationControllerTest` KDoc 에 부재 근거와 고정 테스트가 있다.)
  */
 object NotificationMessages {
 
@@ -84,6 +101,27 @@ object NotificationMessages {
         NotificationType.OPPONENT_VERIFIED -> Message(
             title = "증거 도착",
             body = "${actorNickname}님이 인증 사진을 올렸습니다",
+        )
+
+        // 🟡 **초안값 (challenge-forfeit T-B4, 2026-09-05).** 사용자 확정 대상이다.
+        //
+        // ⚠️ **이 한 줄이 발송 스위치다.** 절차를 밟고 열었다 — forfeit-mobile 이
+        //    `PushEvent.ChallengeForfeited` + 딥링크(`Route.Challenge.Detail`) + 목록 비탭
+        //    배선을 마치고 **숫자와 함께 회신한 뒤**에 넣었다 (`:core:push` 28/28 A·i,
+        //    `:feature:notification` 43/43 A·i). `OPPONENT_VERIFIED` 가 2026-08-14 에 밟은
+        //    순서와 같다. **다음 타입도 같은 순서를 지켜라** — 먼저 쓰면 구버전 앱에서
+        //    "눌러도 아무 데도 안 가는" 조용한 실패가 난다.
+        //
+        // 🔑 제목이 `계약 파기.` 인 것은 의도다. 기존 4종이 `영혼의 맹세` / `계약 완료.` /
+        //    `ㅠㅠ` / `증거 도착` 으로 **계약 은유 + 짧은 단정** 톤을 쓰고, 기권은 그 은유에서
+        //    계약을 깨는 행위다. `계약 완료.` 와 마침표까지 짝을 이룬다.
+        //
+        // 🔴 본문의 `님이` 는 **의도적으로 넣었다.** 4종 중 `CHALLENGE_REQUEST` 하나만 `님` 이
+        //    빠져 `"민수과"` 조사 결함이 나 있고 백로그에 올라 있다. **그 실수를 새 문구에
+        //    복제하지 않는다.** (`님이 기권했습니다` 는 받침 유무와 무관하게 성립한다.)
+        NotificationType.CHALLENGE_FORFEITED -> Message(
+            title = "계약 파기.",
+            body = "${actorNickname}님이 기권했습니다",
         )
 
         // 🔴 아래 4종은 선행 feature 가 없어 트리거 자체가 존재하지 않는다.

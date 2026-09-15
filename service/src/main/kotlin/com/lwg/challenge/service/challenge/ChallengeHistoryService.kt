@@ -53,10 +53,17 @@ import java.time.YearMonth
  *  2. 그 달의 challenges — `challenge_date DESC, id DESC`
  *  3. users 일괄 조회 (상대방 N 명 닉네임) — **그 달이 비면 걸지 않는다**
  *
- * 카드에 인증 상태를 그리지 않아
- * verifications 를 조회하지 않는 것은 그대로다 — 판정 규칙상 결과 4개가 양측 인증 상태를
- * **유일하게 결정**하므로([ChallengeVerdict.decide]) 결과 하나가 인증 상태 두 개의 정보를
- * 전부 담는다.
+ * 카드에 인증 상태를 그리지 않아 verifications 를 조회하지 않는다.
+ *
+ * 🔴 **그 근거였던 문장은 기권이 생기면서 더는 참이 아니다** (challenge-forfeit, 2026-09-05).
+ * 원래 근거는 *"결과 4개가 양측 인증 상태를 유일하게 결정하므로 결과 하나가 인증 상태 두 개의
+ * 정보를 전부 담는다"* 였는데, 기권이 들어오면서 [ChallengeVerdict.decide] 의 대응이
+ * **일대일이 아니게 됐다** — `OPPONENT_WIN` 은 이제 *"challenger 만 미인증"* 일 수도,
+ * *"challenger 가 기권했고 상대도 미인증"* 일 수도 있다.
+ *
+ * 🔑 **그래도 조회하지 않는 결론은 그대로다. 근거만 바뀐다** — 보관함 카드는 애초에 인증
+ * 상태를 그리지 않기 때문이다(역산할 이유가 없다). 🔴 **언젠가 카드에 인증 상태를 그리게
+ * 되면 `result` 로 역산하지 말고 verifications 를 조회해라.** 역산은 이제 틀린 답을 낸다.
  */
 @Service
 class ChallengeHistoryService(
@@ -240,9 +247,12 @@ data class ChallengeHistoryPage(
  *   둘 다 주지만 여기는 [myResult] 뿐이다. 보관함 카드가 그리는 것은 *"내가 이겼나"* 하나이고,
  *   둘 다 내려가면 **앱이 어느 쪽을 믿을지 고르게 되며 그 선택이 화면마다 갈린다.**
  *   [Outcome.BOTH_LOSE] 가 이미 있어 *"양쪽 다 졌다"* 도 [myResult] 만으로 표현된다.
- * - **인증 상태 2필드를 담지 않는다.** 판정 규칙상 결과 4개가 양측 인증 상태를 유일하게
- *   결정하므로 결과 pill 하나가 인증 pill 두 개의 정보를 전부 담는다 — **정보량이 0인 필드
- *   2개**다. [ChallengeHistoryService] 가 verifications 를 조회하지 않는 것이 이 결정의 결과다.
+ * - **인증 상태 2필드를 담지 않는다.** 카드가 인증 pill 을 그리지 않기 때문이다.
+ *   [ChallengeHistoryService] 가 verifications 를 조회하지 않는 것이 이 결정의 결과다.
+ *
+ *   ⚠️ **원래 근거는 *"결과 4개가 양측 인증 상태를 유일하게 결정하므로 정보량이 0인 필드 2개"*
+ *   였고, 기권이 그 대응을 일대일이 아니게 만들어 더는 참이 아니다** (challenge-forfeit,
+ *   2026-09-05). 결론은 그대로이되 근거가 바뀌었다 — 자세한 것은 [ChallengeHistoryService] KDoc.
  *
  * 🔴 **2026-08-28 월 단위 개정에서 이 7필드는 하나도 바뀌지 않았다.** 바뀐 것은 이 카드들이
  * 담기는 그릇([ChallengeHistoryPage])뿐이다.

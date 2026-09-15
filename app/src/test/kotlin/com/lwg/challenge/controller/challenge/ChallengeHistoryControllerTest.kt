@@ -5,6 +5,7 @@ import com.lwg.challenge.domain.challenge.Outcome
 import com.lwg.challenge.domain.common.ResponseCode
 import com.lwg.challenge.service.challenge.ChallengeCommandService
 import com.lwg.challenge.service.challenge.ChallengeDetailService
+import com.lwg.challenge.service.challenge.ChallengeForfeitService
 import com.lwg.challenge.service.challenge.ChallengeHistoryPage
 import com.lwg.challenge.service.challenge.ChallengeHistoryService
 import com.lwg.challenge.service.challenge.ChallengeHistoryView
@@ -67,6 +68,9 @@ class ChallengeHistoryControllerTest {
 
     @MockitoBean
     lateinit var challengeDetailService: ChallengeDetailService
+
+    @MockitoBean
+    lateinit var challengeForfeitService: ChallengeForfeitService
 
     private val meId = 1L
 

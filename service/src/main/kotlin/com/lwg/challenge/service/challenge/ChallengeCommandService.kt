@@ -122,6 +122,8 @@ class ChallengeCommandService(
             result = null,
             createdAt = now,
             completedAt = null,
+            // 신청 시점에는 기권이 있을 수 없다 — 기권은 IN_PROGRESS 에서만 가능하다.
+            forfeitedBy = null,
         )
 
         // 사전 검사 통과 후에도 동시 INSERT race 가 남는다 — READ COMMITTED 에서 상대 트랜잭션의

@@ -33,6 +33,9 @@ class NotificationMessagesTest {
         NotificationType.CHALLENGE_ACCEPTED,
         NotificationType.CHALLENGE_REJECTED,
         NotificationType.OPPONENT_VERIFIED,
+        // challenge-forfeit T-B4 (2026-09-05). forfeit-mobile 이 PushEvent·딥링크·목록 비탭
+        // 배선을 마치고 숫자와 함께 회신한 뒤에 열었다 — OPPONENT_VERIFIED 와 같은 절차다.
+        NotificationType.CHALLENGE_FORFEITED,
     )
 
     @Test

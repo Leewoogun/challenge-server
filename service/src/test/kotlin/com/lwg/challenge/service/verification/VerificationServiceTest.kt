@@ -3,6 +3,7 @@ package com.lwg.challenge.service.verification
 import com.lwg.challenge.core.time.KstTime
 import com.lwg.challenge.domain.challenge.Challenge
 import com.lwg.challenge.domain.challenge.ChallengeRepository
+import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.challenge.ChallengeStatus
 import com.lwg.challenge.domain.challenge.ReceivedChallenge
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
@@ -122,6 +123,7 @@ class VerificationServiceTest {
         result = null,
         createdAt = LocalDateTime.of(2026, 8, 14, 9, 0),
         completedAt = null,
+        forfeitedBy = null,
     )
 
     private fun pending(userId: Long) = Verification(
@@ -433,6 +435,33 @@ class VerificationServiceTest {
             assertEquals(VerificationService.MSG_NOT_IN_PROGRESS, e.message, "status=$status")
         }
         assertTrue(photos.stored.isEmpty())
+    }
+
+    /**
+     * 🔴 **상대가 기권한 뒤에는 내가 인증을 올릴 수 없다** (challenge-forfeit spec §3).
+     *
+     * spec §3.1 이 이 항목을 *"저절로 닫히는 것"* 으로 분류하고 **별도 가드를 추가하지 말라**고
+     * 못박았다. 근거는 기권이 챌린지를 즉시 `COMPLETED` 로 만들고, 제출이 **이미**
+     * `IN_PROGRESS` 를 요구한다는 것이다. 이 테스트는 **그 근거가 실제로 성립하는지**를 본다 —
+     * 근거만 적어 두고 확인하지 않으면, 나중에 기권이 다른 상태를 쓰게 되는 날 조용히 뚫린다.
+     *
+     * ⚠️ 위 [IN_PROGRESS 가 아니면 제출할 수 없다] 와 겹쳐 보이지만 축이 다르다. 그쪽은
+     * *"상태 목록"* 을 고정하고, 이쪽은 *"기권이 만드는 상태가 그 목록 안에 있다"* 를 고정한다.
+     */
+    @Test
+    fun `상대가 기권해 끝난 챌린지에는 인증을 제출할 수 없다`() {
+        // 기권이 남기는 상태: COMPLETED + result + forfeited_by. 사진은 한 장도 저장되지 않는다.
+        challenges.put(
+            challenge(ChallengeStatus.COMPLETED).copy(
+                result = ChallengeResult.CHALLENGER_WIN,
+                forfeitedBy = OPPONENT,
+            ),
+        )
+
+        val e = assertThrows<OneButtonDialogException> { service.submit(CHALLENGER, CHALLENGE_ID, JPEG) }
+
+        assertEquals(VerificationService.MSG_NOT_IN_PROGRESS, e.message)
+        assertTrue(photos.stored.isEmpty(), "거부된 요청은 디스크에 아무것도 남기지 않는다")
     }
 
     /**
@@ -824,6 +853,8 @@ private class FakeChallengeRepository : ChallengeRepository {
     }
 
     override fun findById(id: Long): Challenge? = store[id]
+    /** 잠금은 흉내낼 수 없다 — 이 fake 로는 동시성이 검증되지 않는다 (JudgementFakes KDoc). */
+    override fun findByIdForUpdate(id: Long): Challenge? = findById(id)
 
     override fun findActiveByUser(userId: Long, statuses: Collection<ChallengeStatus>): List<Challenge> =
         store.values.filter { (it.challengerId == userId || it.opponentId == userId) && it.status in statuses }

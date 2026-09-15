@@ -20,6 +20,8 @@ import java.time.LocalDateTime
  *
  * `opponentMission` 은 상대가 수락(accept)하며 직접 입력하므로 PENDING 구간에서는 null 이다
  * (challenge-create spec 결정 2, V5__challenge_create_opponent_mission_nullable.sql).
+ *
+ * `forfeitedBy` 는 V12 에서 추가됐다 (challenge-forfeit). 기권 없이 끝났거나 아직 안 끝났으면 null.
  */
 @Entity
 @Table(name = "challenges")
@@ -61,6 +63,16 @@ class ChallengeEntity(
 
     @Column(name = "completed_at")
     var completedAt: LocalDateTime? = null,
+
+    /**
+     * 기권한 사람의 user id (V12, challenge-forfeit). **null = 기권 없음.**
+     *
+     * `users(id)` 를 참조하는 값이지만 **FK 제약을 걸지 않는다** — `challenger_id`/`opponent_id`
+     * 와 달리 이 값은 언제나 그 둘 중 하나이고, 두 컬럼이 이미 FK 로 무결성을 보증한다.
+     * 세 번째 FK 는 같은 사실을 한 번 더 강제할 뿐이다 (V12 주석에 근거).
+     */
+    @Column(name = "forfeited_by")
+    var forfeitedBy: Long? = null,
 ) {
 
     fun toDomain(): Challenge = Challenge(
@@ -76,6 +88,7 @@ class ChallengeEntity(
         result = result?.let { runCatching { ChallengeResult.valueOf(it) }.getOrNull() },
         createdAt = createdAt,
         completedAt = completedAt,
+        forfeitedBy = forfeitedBy,
     )
 
     companion object {
@@ -92,6 +105,7 @@ class ChallengeEntity(
             result = c.result?.name,
             createdAt = c.createdAt,
             completedAt = c.completedAt,
+            forfeitedBy = c.forfeitedBy,
         )
     }
 }

@@ -488,6 +488,7 @@ class ChallengeHistoryServiceTest {
         result = result,
         createdAt = date.atTime(9, 0),
         completedAt = completedAt,
+        forfeitedBy = null,
     )
 
     private fun notCompleted(
@@ -534,6 +535,8 @@ class ChallengeHistoryServiceTest {
             completedOf(userId).minOfOrNull { it.challengeDate }
 
         override fun findById(id: Long): Challenge? = store[id]
+        /** 잠금은 흉내낼 수 없다 — 이 fake 로는 동시성이 검증되지 않는다 (JudgementFakes KDoc). */
+        override fun findByIdForUpdate(id: Long): Challenge? = findById(id)
 
         override fun findActiveByUser(userId: Long, statuses: Collection<ChallengeStatus>): List<Challenge> =
             emptyList()

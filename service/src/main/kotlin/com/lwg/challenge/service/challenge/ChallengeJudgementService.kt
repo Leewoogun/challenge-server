@@ -1,8 +1,10 @@
 package com.lwg.challenge.service.challenge
 
+import com.lwg.challenge.domain.challenge.Challenge
 import com.lwg.challenge.domain.challenge.ChallengeRepository
 import com.lwg.challenge.domain.challenge.ChallengeStatus
 import com.lwg.challenge.domain.challenge.ChallengeVerdict
+import com.lwg.challenge.domain.challenge.Forfeit
 import com.lwg.challenge.domain.challenge.Outcome
 import com.lwg.challenge.domain.friendrecord.FriendRecord
 import com.lwg.challenge.domain.friendrecord.FriendRecordRepository
@@ -42,6 +44,19 @@ import java.time.LocalDateTime
  * 계약 §3.2 가 *"발송하지 않는다. notifications row 증가 0"* 이라고 못박았다.
  * **생성자에 `ApplicationEventPublisher` 가 없는 것 자체가 그 보장이다** — 넣는 순간 이 문단이
  * 거짓이 되므로, 결과 알림이 범위에 들어오는 날 이 KDoc 부터 고쳐라.
+ *
+ * ⚠️ **기권(challenge-forfeit)은 이 문단을 깨지 않았다.** `CHALLENGE_FORFEITED` 를 발행하는
+ * 것은 [ChallengeForfeitService] 이고 이 빈은 여전히 publisher 를 모른다. 그래서 **자정 배치가
+ * 판정한 건은 기권 건이든 아니든 알림 0건**이라는 사실이 그대로다.
+ *
+ * ## 🔴 기권도 **이 함수를 탄다** (challenge-forfeit T-B3)
+ *
+ * 기권은 즉시 확정이지만 판정·`COMPLETED` 전이·전적 집계를 **새로 쓰지 않는다.**
+ * [ChallengeForfeitService] 가 `challenges.forfeited_by` 만 기록하고 이 메서드를 그대로 부른다.
+ * 그래서 기권 경로와 자정 배치 경로가 **같은 코드**이며, 갈릴 수가 없다.
+ *
+ * 🔴 **기권 전용 집계 함수를 만들지 마라.** 만드는 순간 `ChallengeVerdict` KDoc 이 경계하는
+ * *"두 벌의 규칙"* 이 실제로 생긴다.
  */
 @Service
 class ChallengeJudgementService(
@@ -76,7 +91,10 @@ class ChallengeJudgementService(
         val challengerVerified = verifications[challenge.challengerId]?.status == VerificationStatus.VERIFIED
         val opponentVerified = verifications[challenge.opponentId]?.status == VerificationStatus.VERIFIED
 
-        val result = ChallengeVerdict.decide(challengerVerified, opponentVerified)
+        // 🔴 userId → 역할 환산은 **호출부 책임**이다 (ChallengeVerdict KDoc: "환산 책임을
+        //    호출부에 두고 이 함수는 이미 환산된 값만 본다"). 기권 여부를 판정에 반영하는 곳도
+        //    여기 한 곳뿐이라, 기권 경로와 배치 경로가 같은 줄을 탄다.
+        val result = ChallengeVerdict.decide(challengerVerified, opponentVerified, challenge.forfeitOf())
 
         // 계약 §3.1 "미인증 시 자동 패배" 이행. 🔴 row 가 없으면 **만들지 않는다** —
         // VerificationService 가 "수락 없이 인증된 챌린지를 만들지 않는다" 며 거부하는 것과 같은 이유로,
@@ -135,6 +153,22 @@ class ChallengeJudgementService(
 
         challengeRepository.save(challenge.copy(status = ChallengeStatus.EXPIRED))
         return true
+    }
+
+    /**
+     * `forfeited_by`(userId) 를 [Forfeit] 역할로 환산한다. 기권이 없으면 null.
+     *
+     * 🔴 **당사자가 아닌 id 가 들어 있으면 터뜨린다.** [ChallengeForfeitService] 가 당사자
+     * 검증을 통과한 요청자만 이 컬럼에 쓰므로 정상 경로에서는 도달하지 않는다. 그런 row 가
+     * 실제로 나타났다면 데이터가 깨진 것이고, 그때 **조용히 `null` 로 떨어뜨리면 기권이 없던
+     * 것처럼 판정된다** — 즉 깨진 사실이 잘못된 승패로 덮인다. 배치는 이 예외를 건별로 세고
+     * 넘어가므로(`ChallengeJudgementRunner`) 한 건이 나머지를 막지도 않는다.
+     */
+    private fun Challenge.forfeitOf(): Forfeit? = when (forfeitedBy) {
+        null -> null
+        challengerId -> Forfeit.CHALLENGER
+        opponentId -> Forfeit.OPPONENT
+        else -> error("당사자가 아닌 사람이 기권자로 기록돼 있다 (challengeId=$id, forfeitedBy=$forfeitedBy)")
     }
 
     private fun recordOf(userId: Long): UserRecord =
