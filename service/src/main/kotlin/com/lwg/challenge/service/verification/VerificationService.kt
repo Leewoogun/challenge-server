@@ -257,7 +257,18 @@ class VerificationService(
         val verification = verificationRepository.findAllByChallengeIds(listOf(challengeId))
             .firstOrNull { it.userId == targetUserId }
             ?: return PhotoReadResult.NotFound
-        if (verification.status != VerificationStatus.VERIFIED) return PhotoReadResult.NotFound
+        // 🔴 **`status` 를 보지 않는다. key 유무만 본다** (ai-verification).
+        //
+        //    AI 판별이 들어오면서 **`FAILED` 인데 사진이 있는 row** 가 처음 생겼다 — 제출은
+        //    했는데 AI 가 미션과 무관하다고 본 경우다. 예전에는 `FAILED` 가 100% "미제출로
+        //    마감" 이라 key 가 항상 null 이었고, 그래서 status 검사와 key 검사가 같은 말이었다.
+        //
+        //    이제는 다르다. status 로 막으면 **반려된 사진이 404 가 되어 사용자가 자기가 뭘
+        //    올렸는지 볼 수 없다.** 반려 사유만 보이고 근거는 안 보이는 화면이 되는데, 그건
+        //    기획 §2.4(증거 보존)와 정면으로 어긋난다 — 되돌릴 수 없는 판정일수록 근거가 남아야 한다.
+        //
+        //    ⚠️ key != null 은 곧 "제출된 사진이 있다" 와 같다. [submit] 이 key 와 status 를
+        //    같은 트랜잭션에서 함께 쓰고, 탈퇴만이 key 를 NULL 로 민다(mypage T-B2).
         val key = verification.photoUrl ?: return PhotoReadResult.NotFound
 
         val bytes = photoStorage.read(key) ?: return PhotoReadResult.NotFound
@@ -271,9 +282,13 @@ class VerificationService(
      *
      * | 조합 | `photoUrl` | `photoDeleted` | 앱이 그리는 것 |
      * |---|---|---|---|
-     * | `VERIFIED` + key 있음 | 경로 | `false` | 사진 |
-     * | `VERIFIED` + key 없음 + owner `DELETED` | `null` | **`true`** | *"탈퇴로 삭제된 사진"* |
-     * | 그 외 (`PENDING`/`FAILED`, 또는 `VERIFIED` + key 없음인데 owner 가 살아 있음) | `null` | `false` | 사진 없음 / 로드 실패 |
+     * | key 있음 (`VERIFIED` **또는 AI 반려된 `FAILED`**) | 경로 | `false` | 사진 |
+     * | 제출한 적 있음(`verifiedAt != null`) + key 없음 + owner `DELETED` | `null` | **`true`** | *"탈퇴로 삭제된 사진"* |
+     * | 그 외 (미제출 `PENDING`/`FAILED`, 또는 제출했는데 key 가 없고 owner 가 살아 있음) | `null` | `false` | 사진 없음 / 로드 실패 |
+     *
+     * 🔴 **첫 줄이 ai-verification 에서 넓어졌다.** 예전에는 `VERIFIED` 만 사진을 가질 수
+     * 있었으나, 이제 **AI 가 반려한 `FAILED` 도 사진을 갖는다.** 판정 근거가 된 사진을 숨기면
+     * 사용자는 *"인정되지 않았다"* 만 보고 **무엇이 인정되지 않았는지는 못 본다.**
      *
      * 🔴 **세 번째 줄의 마지막 경우가 이 필드를 만든 이유다.** 그건 *"인증은 됐는데 URL 이
      * 없는 비정상"* 이고 앱이 `"사진을 불러오지 못했어요"` 로 그린다. 탈퇴자의 삭제된 사진이
@@ -298,15 +313,33 @@ class VerificationService(
         // 판단 기준은 status 가 아니라 **key 유무**다 — 탈퇴는 row(status/verified_at)를 보존한
         // 채 사진 파일과 key 만 지우기 때문이다 (mypage T-B2). 원래부터 key 로 보고 있던 덕분에
         // 이 줄은 그 feature 가 들어올 때도 고칠 것이 없었다.
-        val hasPhoto = status == VerificationStatus.VERIFIED && key != null
+        //
+        // 🔴 **status 조건을 뗐다** (ai-verification). `FAILED` 인데 사진이 있는 row 가 처음
+        //    생겼기 때문이다 — AI 가 반려한 건이다. status 로 막으면 반려된 사진이 `photoUrl:
+        //    null` 로 나가고, 앱은 그걸 `"사진을 불러오지 못했어요"` 로 그린다. 그건 아래 표의
+        //    세 번째 줄이 경계하는 바로 그 실패다 — **영구 상태를 일시적 실패의 어휘로 말하는 것.**
+        val hasPhoto = key != null
         return PartyVerificationView(
             userId = userId,
             status = status,
             photoUrl = if (hasPhoto) photoPath(challengeId, party) else null,
             verifiedAt = verification?.verifiedAt,
-            photoDeleted = status == VerificationStatus.VERIFIED &&
+            // 🔴 여기도 status 가 아니라 **`verifiedAt` 유무**로 본다 (ai-verification).
+            //    필요한 명제는 *"이 사람이 사진을 낸 적이 있는가"* 이고, AI 반려 이후로는
+            //    `status == VERIFIED` 가 그 명제와 어긋난다(반려되면 FAILED 인데 낸 적은 있다).
+            //    `verifiedAt` 은 [submit] 만이 쓰고 탈퇴도 판정도 건드리지 않으므로
+            //    (VerificationRepository.clearPhotoKeysByUserId KDoc) 그 명제와 정확히 일치한다.
+            //    ⚠️ 기존 데이터에서는 두 조건이 같은 값이다 — 동작 변화가 없다.
+            photoDeleted = verification?.verifiedAt != null &&
                 key == null &&
                 ownerStatus == UserStatus.DELETED,
+            // 🔴 **wire 게이트 — 계약 조항이다** (ai-verification api-contract §1.1).
+            //    `ai_reason` 컬럼은 rubric 튜닝 근거라 판정 종류를 안 가리고 전건 저장되지만
+            //    (spec T-B2, V13 주석), **wire 는 사용자 화면**이라 미인증 확정 건만 실어야 한다.
+            //    게이트가 없으면 `PASS` 의 통과 사유 · 무키 상태의 *"AI 검증이 비활성 상태입니다"* ·
+            //    🔴 **네트워크 예외 메시지**까지 *"인증이 인정되지 않았어요: …"* 로 사용자에게 나간다.
+            //    ⚠️ 조건식을 여기 적지 마라 — 판정 규칙의 사본이 된다 (`rejectedByAi` KDoc).
+            aiReason = verification?.takeIf { it.rejectedByAi() }?.aiReason,
         )
     }
 
@@ -551,4 +584,11 @@ data class PartyVerificationView(
     val photoUrl: String?,
     val verifiedAt: LocalDateTime?,
     val photoDeleted: Boolean,
+    /**
+     * AI 가 남긴 **반려 사유**. 통과했거나 판별하지 않았으면 null (ai-verification).
+     *
+     * 🔴 **`aiVerdict`/`aiConfidence` 는 내리지 않는다.** 앱이 쓸 데가 없고, **신뢰도 숫자를
+     * 노출하면 사용자가 그 값을 두고 다툰다.** 서버 컬럼으로만 남긴다(rubric 튜닝 근거 — V13).
+     */
+    val aiReason: String?,
 )

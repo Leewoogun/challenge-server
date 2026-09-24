@@ -205,6 +205,7 @@ class VerificationControllerTest {
                     photoUrl = "/api/v1/challenges/7/photos/challenger",
                     verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
                     photoDeleted = false,
+                    aiReason = null,
                 ),
                 opponent = PartyVerificationView(
                     userId = 14L,
@@ -212,6 +213,7 @@ class VerificationControllerTest {
                     photoUrl = null,
                     verifiedAt = null,
                     photoDeleted = false,
+                    aiReason = null,
                 ),
             ),
         )
@@ -238,8 +240,8 @@ class VerificationControllerTest {
         Mockito.`when`(verificationService.getVerifications(anyLong(), anyLong())).thenReturn(
             VerificationsView(
                 challengeId = 7L,
-                challenger = PartyVerificationView(1L, VerificationStatus.PENDING, null, null, photoDeleted = false),
-                opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null, photoDeleted = false),
+                challenger = PartyVerificationView(1L, VerificationStatus.PENDING, null, null, photoDeleted = false, aiReason = null),
+                opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null, photoDeleted = false, aiReason = null),
             ),
         )
 
@@ -271,8 +273,9 @@ class VerificationControllerTest {
                     photoUrl = null,
                     verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
                     photoDeleted = true,
+                    aiReason = null,
                 ),
-                opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null, photoDeleted = false),
+                opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null, photoDeleted = false, aiReason = null),
             ),
         )
 

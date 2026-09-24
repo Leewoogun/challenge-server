@@ -103,4 +103,37 @@ data class PartyVerificationDto(
         description = "true = 탈퇴로 사진이 삭제됨(영구). false 인데 photoUrl 도 null 이면 그건 로드 실패/미인증이다",
     )
     val photoDeleted: Boolean,
+
+    /**
+     * AI 가 남긴 **반려 사유**. `null` 이면 앱은 **아무것도 그리지 않는다** (ai-verification, ADR-0013).
+     *
+     * ## 🔴 `null` 이 세 가지를 동시에 뜻하고, 그건 의도다
+     *
+     * ```
+     * null = ⓐ AI 가 통과시켰다
+     *      = ⓑ AI 를 아예 안 불렀다 (fail-open — 키 없음/429/타임아웃/파싱실패)
+     *      = ⓒ 미제출·기권이라 판정 대상이 아니었다
+     * ```
+     *
+     * 셋 다 화면에서는 *"반려 사유 없음"* = 아무것도 안 그린다로 귀결되므로 **wire 에 구분을
+     * 만들지 않는다.** 앱 규칙은 한 줄이다: **non-null 일 때만 사유를 그린다.**
+     *
+     * ⚠️ **그러나 운영에서는 ⓑ 를 반드시 구분해야 한다** — Gemini 선불 잔액이 마르면 fail-open 이
+     * 조용히 켜지고 *"아무 사진이나 통과"* 하는 상태로 복귀한다(ADR-0013 §결정 4 대가).
+     * **그 구분은 wire 가 아니라 배치 요약이 진다** (`JudgementRunResult.aiFailOpen`).
+     * *"앱에 안 보인다"* 와 *"아무도 모른다"* 는 다르다 — 🔴 이 문단을 근거로 배치 카운터를 빼지 마라.
+     *
+     * ## 🔴 `aiVerdict`/`aiConfidence` 는 내리지 않는다
+     *
+     * 앱이 쓸 데가 없고, **신뢰도 숫자를 노출하면 사용자가 그 값을 두고 다툰다.**
+     * 서버 컬럼으로만 남긴다 (rubric 튜닝 근거 — V13 마이그레이션 주석).
+     */
+    @field:Schema(
+        nullable = true,
+        // 🔴 해요체다. 앱이 붙이는 접두어("인증이 인정되지 않았어요:")와 어체를 맞춘다 —
+        //    프롬프트가 해요체를 지시한다(GeminiMissionVerifier.buildInstruction). ⚠️ 지시이지 보장은 아니다.
+        example = "책상 위 커피잔 사진으로, 미션(주 3회 운동) 수행 증거로 보기 어려워요.",
+        description = "AI 반려 사유. null = 통과했거나 판별하지 않았음. 앱은 non-null 일 때만 표시한다",
+    )
+    val aiReason: String?,
 )

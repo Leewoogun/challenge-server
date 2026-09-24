@@ -733,7 +733,7 @@ class WireShapeContractTest {
         val data = dataOf(ChallengeVerificationsResponse(verificationsData()))
         assertKeys(setOf("challengeId", "challenger", "opponent"), data, "ChallengeVerificationsData")
         assertKeys(
-            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted"),
+            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted", "aiReason"),
             data.path("challenger"),
             "PartyVerificationDto",
         )
@@ -790,16 +790,49 @@ class WireShapeContractTest {
         val opponent = dataOf(response).path("opponent")
 
         assertKeys(
-            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted"),
+            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted", "aiReason"),
             opponent,
             "PartyVerificationDto (PENDING)",
         )
         assertTrue(opponent.path("photoUrl").isNull, "photoUrl 키가 있고 값이 null 이어야 한다")
         assertTrue(opponent.path("verifiedAt").isNull)
+        assertTrue(opponent.path("aiReason").isNull, "aiReason 키가 있고 값이 null 이어야 한다")
         assertTrue(
             mapper.writeValueAsString(response).contains(""""photoUrl":null"""),
             "원문에 photoUrl 키가 null 값으로 남아 있어야 한다",
         )
+        assertTrue(
+            mapper.writeValueAsString(response).contains(""""aiReason":null"""),
+            "원문에 aiReason 키가 null 값으로 남아 있어야 한다",
+        )
+    }
+
+    /**
+     * 🔴 **AI 반려는 `status = FAILED` 에 사유와 사진 경로가 함께 나간다** (ai-verification).
+     *
+     * 이 조합이 이 feature 가 wire 에 만든 **유일한 새 상태**다. 예전에는 `FAILED` 면 `photoUrl`
+     * 이 항상 null 이었으므로(미제출로 마감), **앱이 그 낡은 규칙을 코드에 굳혀 두면 반려된
+     * 사진을 안 그린다.** 계약이 이 조합을 허용한다는 것을 shape 으로 못박는다.
+     */
+    @Test
+    fun `PartyVerificationDto - AI 반려는 FAILED 에 사유와 사진 경로가 함께 나간다`() {
+        val response = ChallengeVerificationsResponse(
+            verificationsData().copy(
+                challenger = verificationsData().challenger.copy(
+                    status = VerificationStatus.FAILED,
+                    aiReason = "책상 위 커피잔 사진으로, 미션(주 3회 운동) 수행 증거로 보기 어려워요.",
+                ),
+            ),
+        )
+        val challenger = dataOf(response).path("challenger")
+
+        assertEquals("FAILED", challenger.path("status").asText())
+        assertTrue(challenger.path("aiReason").isTextual, "반려 사유가 문자열로 나가야 한다")
+        assertTrue(
+            !challenger.path("photoUrl").isNull,
+            "반려돼도 사진 경로는 남는다 — 판정의 근거를 숨기면 사용자가 무엇이 반려됐는지 못 본다",
+        )
+        assertEquals(false, challenger.path("photoDeleted").asBoolean(), "반려는 삭제가 아니다")
     }
 
     // ─── fixtures ────────────────────────────────────────────────
@@ -813,6 +846,8 @@ class WireShapeContractTest {
             verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
             // 정상 사용자 — 사진이 살아 있다. 탈퇴 케이스는 별도 테스트에서 copy 로 만든다.
             photoDeleted = false,
+            // 통과했거나 판별 전이다. 반려 케이스는 별도 테스트에서 copy 로 만든다.
+            aiReason = null,
         ),
         opponent = PartyVerificationDto(
             userId = 14L,
@@ -820,6 +855,7 @@ class WireShapeContractTest {
             photoUrl = null,
             verifiedAt = null,
             photoDeleted = false,
+            aiReason = null,
         ),
     )
 

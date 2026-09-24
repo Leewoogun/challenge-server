@@ -213,6 +213,8 @@ class VerificationController(
         // 탈퇴로 사진이 지워졌는지는 서비스가 이미 판정했다 — 앱은 "왜" 가 아니라
         // "뭘 그릴지" 만 받는다 (`PartyVerificationDto.photoDeleted` KDoc).
         photoDeleted = photoDeleted,
+        // 통과했거나 판별하지 않았으면 null 이다 — 앱은 non-null 일 때만 그린다.
+        aiReason = aiReason,
     )
 
     /** `ChallengeCommandController` 와 같은 규칙. principal 은 userId(Long). */

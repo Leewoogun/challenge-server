@@ -6,6 +6,8 @@ import com.lwg.challenge.domain.challenge.ChallengeResult
 import com.lwg.challenge.domain.challenge.ChallengeStatus
 import com.lwg.challenge.domain.verification.Verification
 import com.lwg.challenge.domain.verification.VerificationStatus
+import com.lwg.challenge.service.verification.MissionVerdictRecorder
+import com.lwg.challenge.service.verification.MissionVerificationRunner
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -51,7 +53,13 @@ class ChallengeJudgementRunnerTest {
         clock,
     )
 
-    private val runner = ChallengeJudgementRunner(challenges, judgementService, clock)
+    private val runner = ChallengeJudgementRunner(
+        challenges,
+        judgementService,
+        // AI 검증은 비활성 배선이다 — 이유는 그 헬퍼 KDoc 참조 (ai-verification).
+        disabledMissionVerificationRunner(challenges, verifications),
+        clock,
+    )
 
     private fun seedChallenge(
         id: Long,
@@ -94,6 +102,70 @@ class ChallengeJudgementRunnerTest {
     }
 
     private fun statusOf(id: Long) = challenges.all().single { it.id == id }.status
+
+    // ─── 🔴 순서 제약 — AI 검증이 판정보다 **먼저** 돈다 (ai-verification) ──
+
+    /**
+     * 🔴 **AI 반려가 판정에 반영되는 것은 순서에 걸려 있다.**
+     *
+     * [ChallengeJudgementService.judge] 는 `status == VERIFIED` 두 개를 읽어 승패를 낸다.
+     * 검증 단계가 그 읽기 **전에** 끝나야 반려가 승패에 들어간다. 🔴 **순서가 뒤집히면 반려가
+     * 판정에 반영되지 않고 그 사실이 조용하다** — 예외도 로그도 없이 옛 규칙대로 이긴다.
+     *
+     * 🔑 **순서를 직접 관찰하지 않고 결과로 가른다.** 양측이 사진을 냈고 AI 가 둘 다 반려하면:
+     * - 순서가 맞으면 → 둘 다 `FAILED` → [ChallengeVerdict] → **`BOTH_LOSE`**
+     * - 순서가 뒤집히면 → 판정 시점엔 둘 다 `VERIFIED` → **`DRAW`**
+     *
+     * **두 기대값이 갈라지므로 순서가 실제로 검증된다.** 같은 값이 나오는 시드를 썼다면 이
+     * 테스트는 아무것도 증명하지 않는다 (ADR-0012 §차등 검증과 같은 원리).
+     *
+     * ⚠️ `BOTH_LOSE` 가 맞다 — 사용자가 명시적으로 확인·확정했다(2026-09-08, spec §1).
+     * **버그로 읽고 `DRAW` 로 고치지 마라.**
+     */
+    @Test
+    fun `AI 가 양측을 반려하면 판정이 BOTH_LOSE 다 — 검증이 판정보다 먼저 돈다`() {
+        val challenge = seedChallenge(1L, ChallengeStatus.IN_PROGRESS, now.minusMinutes(5))
+        seedVerified(1L, challenge.challengerId)
+        seedVerified(1L, challenge.opponentId)
+
+        val rejectingRunner = ChallengeJudgementRunner(
+            challenges,
+            judgementService,
+            MissionVerificationRunner(
+                challengeRepository = challenges,
+                verificationRepository = verifications,
+                photoStorage = AlwaysReadablePhotoStorage,
+                missionVerifier = AlwaysRejectVerifier,
+                recorder = MissionVerdictRecorder(verifications),
+            ),
+            clock,
+        )
+
+        val result = rejectingRunner.run()
+
+        assertEquals(1, result.judged)
+        assertEquals(2, result.aiRejected, "인증 2건이 반려돼야 한다 — 챌린지 수가 아니다")
+        assertEquals(
+            ChallengeResult.BOTH_LOSE,
+            challenges.all().single { it.id == 1L }.result,
+            "검증이 판정 뒤에 돌았다면 둘 다 VERIFIED 로 읽혀 DRAW 가 나온다",
+        )
+    }
+
+    /** 🔵 위 테스트의 **대조군** — 반려가 없으면 양측 인증은 그대로 `DRAW` 다. */
+    @Test
+    fun `AI 반려가 없으면 양측 인증은 DRAW 다`() {
+        val challenge = seedChallenge(1L, ChallengeStatus.IN_PROGRESS, now.minusMinutes(5))
+        seedVerified(1L, challenge.challengerId)
+        seedVerified(1L, challenge.opponentId)
+
+        // 비활성 배선 — 사진을 못 읽어 AI 를 부르지 않는다(무키 운영 상태와 같은 모양).
+        val result = runner.run()
+
+        assertEquals(1, result.judged)
+        assertEquals(0, result.aiRejected)
+        assertEquals(ChallengeResult.DRAW, challenges.all().single { it.id == 1L }.result)
+    }
 
     // ─── 🔴 소급 판정 (계약 §3.2) ───────────────────────────────
 

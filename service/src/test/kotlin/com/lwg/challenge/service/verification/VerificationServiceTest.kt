@@ -13,12 +13,14 @@ import com.lwg.challenge.domain.photo.PhotoStorage
 import com.lwg.challenge.domain.user.User
 import com.lwg.challenge.domain.user.UserRepository
 import com.lwg.challenge.domain.user.UserStatus
+import com.lwg.challenge.domain.verification.VerdictOutcome
 import com.lwg.challenge.domain.verification.Verification
 import com.lwg.challenge.domain.verification.VerificationRepository
 import com.lwg.challenge.domain.verification.VerificationStatus
 import com.lwg.challenge.service.notification.ChallengeNotificationEvent
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -659,6 +661,186 @@ class VerificationServiceTest {
 
         assertEquals(VerificationStatus.PENDING, view.opponent.status)
         assertEquals(false, view.opponent.photoDeleted, "올린 적이 없는 사진은 삭제된 것이 아니다")
+    }
+
+    // ─── AI 반려된 인증의 사진 (ai-verification) ─────────────────
+
+    /**
+     * 🔴 **이 프로젝트에 `FAILED` 인데 사진이 있는 row 가 처음 생겼다.**
+     *
+     * 예전에는 `FAILED` 가 100% *"미제출로 마감"* 이라 `photo_url` 이 항상 null 이었고,
+     * 그래서 `status == VERIFIED` 검사와 `key != null` 검사가 **같은 말이었다.**
+     * AI 판별이 들어오면서 둘이 갈렸다 — 제출은 했는데 AI 가 미션과 무관하다고 본 경우다.
+     *
+     * status 로 막으면 **판정 근거가 된 사진이 화면에서 사라진다.** 사용자는 *"인정되지
+     * 않았습니다"* 만 보고 무엇이 인정되지 않았는지는 못 본다 (기획 §2.4 증거 보존).
+     */
+    @Test
+    fun `AI 가 반려해 FAILED 가 돼도 사진 경로는 그대로 나간다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        rejectByAi(CHALLENGER)
+
+        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+
+        assertEquals(VerificationStatus.FAILED, view.challenger.status)
+        assertNotNull(view.challenger.photoUrl, "반려돼도 사진은 보여야 한다 — 판정의 근거다")
+        assertEquals(false, view.challenger.photoDeleted, "지워진 것이 아니라 반려된 것이다")
+    }
+
+    @Test
+    fun `AI 가 반려해 FAILED 가 돼도 사진 바이트를 읽을 수 있다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        rejectByAi(CHALLENGER)
+
+        val result = service.readPhoto(OPPONENT, CHALLENGE_ID, VerificationParty.CHALLENGER)
+
+        assertInstanceOf(PhotoReadResult.Found::class.java, result)
+    }
+
+    /**
+     * 🔴 **미제출로 `FAILED` 가 된 건은 여전히 사진이 없다.** 위 두 테스트가 연 문이
+     * *"`FAILED` 면 무조건 사진이 있다"* 로 넓어지지 않았음을 고정한다 — 판정 배치가
+     * `PENDING → FAILED` 로 전이시킨 row 는 애초에 key 가 없다.
+     */
+    @Test
+    fun `미제출로 FAILED 가 된 건은 사진이 없다`() {
+        markFailedWithoutPhoto(OPPONENT)
+
+        val view = service.getVerifications(CHALLENGER, CHALLENGE_ID)
+
+        assertEquals(VerificationStatus.FAILED, view.opponent.status)
+        assertNull(view.opponent.photoUrl)
+        assertEquals(false, view.opponent.photoDeleted)
+    }
+
+    /** 반려된 뒤 탈퇴하면 사진은 지워지고, 그건 *"반려"* 가 아니라 *"삭제"* 로 보여야 한다. */
+    @Test
+    fun `AI 반려 후 탈퇴하면 photoDeleted 가 true 다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        rejectByAi(CHALLENGER)
+        verifications.clearPhotoKeysByUserId(CHALLENGER)
+        users.put(user(CHALLENGER, UserStatus.DELETED))
+
+        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+
+        assertTrue(
+            view.challenger.photoDeleted,
+            "status 가 FAILED 라는 이유로 '삭제됨' 을 놓치면 데이터 이상과 구분되지 않는다",
+        )
+    }
+
+    // ─── 🔴 wire 게이트 (ai-verification 계약 §1.1) ──────────────
+
+    /**
+     * 🔴 **`ai_reason` 컬럼은 전건 저장되지만 wire 는 미인증 확정 건만 싣는다.**
+     *
+     * 컬럼은 rubric 튜닝의 유일한 근거라 `PASS`·`UNCERTAIN`·`UNVERIFIABLE`·`ERROR` 까지 전부
+     * 저장되는 것이 **설계대로**다(spec T-B2, V13 주석). 🔴 그런데 그 컬럼을 그대로 내리면
+     * 사용자가 *"인증이 인정되지 않았어요: {통과 사유}"* 를 **이긴 화면에서** 본다.
+     *
+     * ⚠️ 특히 `ERROR` 의 `reason` 은 `"검증 중 예외: ${'$'}{e.message}"` 라 **네트워크 예외
+     * 메시지가 사용자 화면에 나간다.** `UNVERIFIABLE` 은 무키 상태의 제출 **전건**이 해당한다.
+     */
+    @Test
+    fun `AI 가 통과시킨 건의 사유는 wire 에 실리지 않는다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        recordAiVerdict(CHALLENGER, VerdictOutcome.PASS, 0.97, "운동복 차림으로 헬스장에서 촬영된 사진입니다")
+
+        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+
+        assertNull(view.challenger.aiReason, "통과 사유가 반려 문구로 사용자에게 나가면 안 된다")
+        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
+    }
+
+    /** 🔴 무키 상태(NoOp)의 제출 전건이 이 경로를 탄다 — 내부 운영 문구가 새면 안 된다. */
+    @Test
+    fun `AI 를 부르지 못한 건의 사유는 wire 에 실리지 않는다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        recordAiVerdict(CHALLENGER, VerdictOutcome.UNVERIFIABLE, 0.0, "AI 검증이 비활성 상태입니다 (API 키 미설정)")
+
+        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+    }
+
+    /** 🔴 예외 메시지가 사용자 화면에 나가는 경로를 막는다. */
+    @Test
+    fun `호출 실패 건의 예외 메시지는 wire 에 실리지 않는다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        recordAiVerdict(CHALLENGER, VerdictOutcome.ERROR, 0.0, "검증 중 예외: Connection reset by peer")
+
+        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+    }
+
+    @Test
+    fun `UNCERTAIN 건의 사유는 wire 에 실리지 않는다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        recordAiVerdict(CHALLENGER, VerdictOutcome.UNCERTAIN, 0.9, "판단이 서지 않습니다")
+
+        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+    }
+
+    /**
+     * 🔴 **문턱 미만 `REJECT` 도 실리지 않는다** — 미인증 처리를 하지 않았으므로 반려가 아니다.
+     *
+     * 🔑 이 테스트가 게이트를 `outcome == REJECT` **만**으로 쓴 구현과 갈라 준다. 그렇게 쓰면
+     * 통과시킨 건에 반려 사유가 붙어 *"인정되지 않았어요"* 가 뜨는데 `status` 는 `VERIFIED` 다.
+     */
+    @Test
+    fun `문턱 미만 REJECT 의 사유는 wire 에 실리지 않는다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        recordAiVerdict(CHALLENGER, VerdictOutcome.REJECT, 0.79, "애매합니다")
+
+        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+
+        assertNull(view.challenger.aiReason, "통과시킨 건이므로 반려 사유가 아니다")
+        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
+    }
+
+    /** 반려 확정 건은 실린다 — 게이트가 전부 막아버리지 않았음을 고정한다. */
+    @Test
+    fun `미인증 확정 건의 사유만 wire 에 실린다`() {
+        service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
+        rejectByAi(CHALLENGER)
+
+        assertEquals("미션과 무관한 사진", service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+    }
+
+    /** 판정 로그만 심는다 — `status` 는 건드리지 않는다(반려가 아닌 경우를 만들기 위함). */
+    private fun recordAiVerdict(userId: Long, outcome: VerdictOutcome, confidence: Double, reason: String) {
+        val mine = verifications.all().first { it.userId == userId && it.challengeId == CHALLENGE_ID }
+        verifications.save(
+            mine.copy(
+                aiVerdict = outcome,
+                aiConfidence = confidence,
+                aiReason = reason,
+                aiCheckedAt = LocalDateTime.now(clock),
+            ),
+        )
+    }
+
+    /**
+     * `MissionVerdictRecorder` 의 전이를 최소한으로 흉내낸다 — 그 서비스 자체는 여기 범위가 아니다.
+     *
+     * ⚠️ **`aiVerdict`/`aiConfidence` 를 함께 심는다.** wire 게이트가 그 두 값으로 판정을
+     * 재구성하므로 `status` 만 `FAILED` 로 바꾸면 사유가 실리지 않는다 — 실제 recorder 도
+     * 셋을 같은 `copy()` 에서 함께 쓴다.
+     */
+    private fun rejectByAi(userId: Long) {
+        val mine = verifications.all().first { it.userId == userId && it.challengeId == CHALLENGE_ID }
+        verifications.save(
+            mine.copy(
+                status = VerificationStatus.FAILED,
+                aiVerdict = VerdictOutcome.REJECT,
+                aiConfidence = 0.93,
+                aiReason = "미션과 무관한 사진",
+                aiCheckedAt = LocalDateTime.now(clock),
+            ),
+        )
+    }
+
+    /** 판정 배치의 `PENDING → FAILED` 전이 — key 가 없는 쪽이다. */
+    private fun markFailedWithoutPhoto(userId: Long) {
+        val mine = verifications.all().first { it.userId == userId && it.challengeId == CHALLENGE_ID }
+        verifications.save(mine.copy(status = VerificationStatus.FAILED))
     }
 
     // ─── 사진 읽기 (2026-08-18 2차 결정 — 조회 서명 URL 폐기) ────

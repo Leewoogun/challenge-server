@@ -7,9 +7,15 @@ import com.lwg.challenge.domain.challenge.ReceivedChallenge
 import com.lwg.challenge.domain.friendrecord.FriendRecord
 import com.lwg.challenge.domain.friendrecord.FriendRecordRepository
 import com.lwg.challenge.domain.userrecord.UserRecord
+import com.lwg.challenge.domain.photo.PhotoStorage
 import com.lwg.challenge.domain.userrecord.UserRecordRepository
+import com.lwg.challenge.domain.verification.MissionVerdict
+import com.lwg.challenge.domain.verification.MissionVerifier
+import com.lwg.challenge.domain.verification.VerdictOutcome
 import com.lwg.challenge.domain.verification.Verification
 import com.lwg.challenge.domain.verification.VerificationRepository
+import com.lwg.challenge.service.verification.MissionVerdictRecorder
+import com.lwg.challenge.service.verification.MissionVerificationRunner
 import java.time.LocalDate
 import java.time.LocalDateTime
 
@@ -195,4 +201,72 @@ internal class FakeFriendRecords : FriendRecordRepository {
         store[saved.userId to saved.friendId] = saved
         return saved
     }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// AI 검증 단계를 **비활성**으로 배선하는 헬퍼 (ai-verification T-B4)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * 사진이 **하나도 없는** 저장소. [MissionVerifier] 까지 가기 전에 대상에서 걸러진다.
+ *
+ * 🔑 판정 배치 테스트가 고정하는 명제는 *"밀린 챌린지를 전부 잡는가"* 이고, 여기에 AI 판정이
+ * 끼어들면 그 명제가 오염된다. 검증 단계 자체는 `MissionVerificationRunnerTest` 가 덮는다.
+ */
+internal object NoPhotoStorage : PhotoStorage {
+    override fun store(challengeId: Long, userId: Long, bytes: ByteArray): String =
+        error("판정 배치 테스트는 사진을 저장하지 않는다")
+
+    override fun read(key: String): ByteArray? = null
+
+    override fun delete(key: String) = Unit
+}
+
+/** 불리면 테스트가 틀린 것이다 — [NoPhotoStorage] 가 그 앞에서 막는다. */
+internal object NeverCalledVerifier : MissionVerifier {
+    override fun verify(missionText: String, photoBytes: ByteArray): MissionVerdict =
+        error("판정 배치 테스트에서 AI 가 불렸다. 검증 단계가 판정 명제를 오염시키고 있다")
+}
+
+/**
+ * AI 검증이 **아무것도 하지 않는** [MissionVerificationRunner].
+ *
+ * 이 배선은 *"검증 단계가 판정을 방해하지 않는다"* 까지 함께 증명한다 — 실제 운영에서도
+ * API 키가 없으면 같은 모양으로 동작한다(`NoOpMissionVerifier`).
+ */
+internal fun disabledMissionVerificationRunner(
+    challenges: ChallengeRepository,
+    verifications: VerificationRepository,
+): MissionVerificationRunner = MissionVerificationRunner(
+    challengeRepository = challenges,
+    verificationRepository = verifications,
+    photoStorage = NoPhotoStorage,
+    missionVerifier = NeverCalledVerifier,
+    recorder = MissionVerdictRecorder(verifications),
+)
+
+// ─────────────────────────────────────────────────────────────────
+// AI 검증이 **실제로 도는** 배선용 (순서 제약 테스트, ai-verification)
+// ─────────────────────────────────────────────────────────────────
+
+/** 어떤 key 든 JPEG 바이트를 돌려준다 — 대상 선별이 아니라 **순서**를 검증하려는 것이므로. */
+internal object AlwaysReadablePhotoStorage : PhotoStorage {
+    override fun store(challengeId: Long, userId: Long, bytes: ByteArray): String =
+        error("이 테스트는 사진을 저장하지 않는다")
+
+    override fun read(key: String): ByteArray? = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte())
+
+    override fun delete(key: String) = Unit
+}
+
+/**
+ * 무조건 반려한다 — 문턱([MissionVerdict.REJECT_THRESHOLD]) 위의 신뢰도를 준다.
+ *
+ * 🔑 `0.99` 인 것이 의도다. 문턱 아래를 주면 `rejectsVerification()` 이 false 가 되어
+ * **아무것도 전이되지 않고**, 그러면 순서 테스트가 조용히 통과해 버린다(반려가 없어서 DRAW 가
+ * 나오는 것을 "순서가 맞다" 로 오독하게 된다).
+ */
+internal object AlwaysRejectVerifier : MissionVerifier {
+    override fun verify(missionText: String, photoBytes: ByteArray): MissionVerdict =
+        MissionVerdict(VerdictOutcome.REJECT, 0.99, "미션과 무관한 사진입니다")
 }

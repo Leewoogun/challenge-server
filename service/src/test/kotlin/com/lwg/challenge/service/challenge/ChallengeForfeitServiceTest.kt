@@ -411,6 +411,9 @@ class ChallengeForfeitServiceTest {
         val runner = ChallengeJudgementRunner(
             challenges,
             ChallengeJudgementService(challenges, verifications, userRecords, friendRecords, afterDeadline),
+            // AI 검증은 비활성 배선이다 (ai-verification). 기권 건은 `COMPLETED` 라 애초에
+            // 검증 대상 쿼리(`IN_PROGRESS`)에 걸리지도 않는다 — 이 테스트가 그 사실도 지킨다.
+            disabledMissionVerificationRunner(challenges, verifications),
             afterDeadline,
         )
 
