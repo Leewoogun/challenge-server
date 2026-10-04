@@ -2,6 +2,8 @@ package com.lwg.challenge.controller.challenge
 
 import com.lwg.challenge.controller.challenge.dto.ActiveChallengeDto
 import com.lwg.challenge.controller.challenge.dto.ActiveChallengeListData
+import com.lwg.challenge.controller.challenge.dto.ActiveChallengeMeDto
+import com.lwg.challenge.controller.challenge.dto.ActiveChallengeOpponentDto
 import com.lwg.challenge.controller.challenge.dto.ActiveChallengeResponse
 import com.lwg.challenge.domain.common.exception.UnauthorizedException
 import com.lwg.challenge.service.challenge.ActiveChallengeService
@@ -59,16 +61,19 @@ class ActiveChallengeController(
     private fun ActiveChallengeView.toDto(): ActiveChallengeDto = ActiveChallengeDto(
         challengeId = challengeId,
         status = status,
-        // result 는 역할 기준 원본, myResult 는 내 시점 — 뒤집기는 서비스가 이미 끝냈다 (계약 §2.2).
-        result = result,
+        // myResult 는 내 시점 — 뒤집기는 서비스가 이미 끝냈다 (계약 §2.2).
         myResult = myResult,
-        myMission = myMission,
-        opponentNickname = opponentNickname,
-        opponentMission = opponentMission,
         // deadline 은 이미 KST LocalDateTime (ADR-0010) — 변환 없이 그대로 직렬화된다.
         deadline = deadline,
-        myVerificationStatus = myVerificationStatus,
-        opponentVerificationStatus = opponentVerificationStatus,
         bet = bet,
+        me = ActiveChallengeMeDto(
+            mission = myMission,
+            verificationStatus = myVerificationStatus,
+        ),
+        opponent = ActiveChallengeOpponentDto(
+            nickname = opponentNickname,
+            mission = opponentMission,
+            verificationStatus = opponentVerificationStatus,
+        ),
     )
 }

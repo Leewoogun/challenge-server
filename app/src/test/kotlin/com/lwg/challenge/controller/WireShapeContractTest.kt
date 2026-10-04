@@ -8,6 +8,8 @@ import com.lwg.challenge.controller.auth.dto.RefreshData
 import com.lwg.challenge.controller.auth.dto.RefreshResponse
 import com.lwg.challenge.controller.challenge.dto.ActiveChallengeDto
 import com.lwg.challenge.controller.challenge.dto.ActiveChallengeListData
+import com.lwg.challenge.controller.challenge.dto.ActiveChallengeMeDto
+import com.lwg.challenge.controller.challenge.dto.ActiveChallengeOpponentDto
 import com.lwg.challenge.controller.challenge.dto.ActiveChallengeResponse
 import com.lwg.challenge.controller.challenge.dto.CancelChallengeData
 import com.lwg.challenge.controller.challenge.dto.CancelChallengeResponse
@@ -370,31 +372,30 @@ class WireShapeContractTest {
     // ─── challenges ──────────────────────────────────────────────
 
     /**
-     * 🔴 **진행 중 카드로 고정한다** — `result`/`myResult` 가 **둘 다 null 인 인스턴스**다.
+     * 🔴 **진행 중 카드로 고정한다** — `myResult` 가 **null 인 인스턴스**다.
      *
-     * challenge-result 로 세 필드가 늘었는데(`status`/`result`/`myResult`) 그중 둘은 홈 카드의
-     * **다수(진행 중)에서 항상 null** 이다. 즉 이 응답에서 실제로 흐르는 값은 대부분 null 이고,
+     * `myResult` 는 홈 카드의 **다수(진행 중)에서 항상 null** 이다. 즉 이 응답에서 실제로 흐르는 값은 대부분 null 이고,
      * `@JsonInclude(NON_NULL)` 이 켜지는 순간 **카드 대부분에서 키가 통째로 사라진다** —
      * 모바일 실패 모드가 `JsonConvertException` → `MissingFieldException` 으로 조용히 바뀐다(#24).
      * 값이 채워진 인스턴스로 고정하면 그 사고를 이 테스트가 못 본다.
      */
     @Test
-    fun `ActiveChallengeResponse - 홈 카드 11필드 (진행 중 = result 계열 null)`() {
+    fun `ActiveChallengeResponse - 홈 카드 7필드 + me·opponent 객체 (진행 중 = myResult null)`() {
         val response = ActiveChallengeResponse(
             ActiveChallengeListData(
                 listOf(
                     ActiveChallengeDto(
                         challengeId = 1L,
                         status = ChallengeStatus.IN_PROGRESS,
-                        result = null,
                         myResult = null,
-                        myMission = "m",
-                        opponentNickname = "n",
-                        opponentMission = "om",
                         deadline = LocalDateTime.of(2026, 8, 7, 0, 0),
-                        myVerificationStatus = VerificationStatus.PENDING,
-                        opponentVerificationStatus = VerificationStatus.PENDING,
                         bet = "b",
+                        me = ActiveChallengeMeDto(mission = "m", verificationStatus = VerificationStatus.PENDING),
+                        opponent = ActiveChallengeOpponentDto(
+                            nickname = "n",
+                            mission = "om",
+                            verificationStatus = VerificationStatus.PENDING,
+                        ),
                     ),
                 ),
             ),
@@ -405,33 +406,33 @@ class WireShapeContractTest {
         val card = data.path("activeChallenges").first()
         assertKeys(
             setOf(
-                "challengeId", "status", "result", "myResult",
-                "myMission", "opponentNickname", "opponentMission",
-                "deadline", "myVerificationStatus", "opponentVerificationStatus", "bet",
+                "challengeId", "status", "myResult", "deadline", "bet", "me", "opponent",
             ),
             card,
             "ActiveChallengeDto",
         )
+        assertKeys(setOf("mission", "verificationStatus"), card.path("me"), "ActiveChallengeMeDto")
+        assertKeys(
+            setOf("nickname", "mission", "verificationStatus"),
+            card.path("opponent"),
+            "ActiveChallengeOpponentDto",
+        )
         // status 는 non-null 이다 — 카드가 결과 표시로 갈아탈 유일한 신호라 값까지 본다 (계약 §2.2).
         assertEquals("IN_PROGRESS", card.path("status").asText())
-        assertTrue(card.path("result").isNull, "result 키가 있고 값이 null 이어야 한다")
         assertTrue(card.path("myResult").isNull, "myResult 키가 있고 값이 null 이어야 한다")
         // 키 부재와 값 null 은 모바일에서 서로 다른 예외라 원문까지 확인한다 (#24 선례).
         val raw = mapper.writeValueAsString(response)
-        assertTrue(raw.contains(""""result":null"""), "원문에 result 가 null 값으로 남아야 한다. actual=$raw")
         assertTrue(raw.contains(""""myResult":null"""), "원문에 myResult 가 null 값으로 남아야 한다. actual=$raw")
     }
 
     /**
-     * 판정된 카드는 `result`(역할 기준) 와 `myResult`(내 시점) 가 **함께** 나간다.
+     * 판정된 카드의 `myResult`(내 시점).
      *
-     * 🔴 두 축이 한 객체에 공존하는 것이 이 계약의 핵심이라(§2.2) 키 존재만으로는 부족하다 —
-     * `BOTH_LOSE` 를 골라 **두 축이 각자의 이름으로 직렬화됨**을 고정한다. `myResult` 는 이제
-     * `LOSE` 로 접히지 않고 `"BOTH_LOSE"` 로 나간다(모바일 협의 확정 — `Outcome` KDoc). 값이
-     * 같아 보여도 `result` 는 역할 기준, `myResult` 는 내 시점이라 축이 다르다.
+     * 🔴 `myResult` 는 `LOSE` 로 접히지 않고 `"BOTH_LOSE"` 로 나간다(모바일 협의 확정 — `Outcome` KDoc).
+     * 역할 기준 `result` 는 이 응답에서 제거됐다 — 내가 challenger 인지 알 수 없어 해석 불가.
      */
     @Test
-    fun `ActiveChallengeResponse - 판정된 카드는 result 와 myResult 가 함께 나간다`() {
+    fun `ActiveChallengeResponse - 판정된 카드는 myResult 가 BOTH_LOSE 그대로 나간다`() {
         val data = dataOf(
             ActiveChallengeResponse(
                 ActiveChallengeListData(
@@ -439,15 +440,15 @@ class WireShapeContractTest {
                         ActiveChallengeDto(
                             challengeId = 2L,
                             status = ChallengeStatus.COMPLETED,
-                            result = ChallengeResult.BOTH_LOSE,
                             myResult = Outcome.BOTH_LOSE,
-                            myMission = "m",
-                            opponentNickname = "n",
-                            opponentMission = "om",
                             deadline = LocalDateTime.of(2026, 8, 7, 0, 0),
-                            myVerificationStatus = VerificationStatus.FAILED,
-                            opponentVerificationStatus = VerificationStatus.FAILED,
                             bet = "b",
+                            me = ActiveChallengeMeDto(mission = "m", verificationStatus = VerificationStatus.FAILED),
+                            opponent = ActiveChallengeOpponentDto(
+                                nickname = "n",
+                                mission = "om",
+                                verificationStatus = VerificationStatus.FAILED,
+                            ),
                         ),
                     ),
                 ),
@@ -455,7 +456,6 @@ class WireShapeContractTest {
         )
         val card = data.path("activeChallenges").first()
         assertEquals("COMPLETED", card.path("status").asText())
-        assertEquals("BOTH_LOSE", card.path("result").asText())
         assertEquals("BOTH_LOSE", card.path("myResult").asText())
     }
 

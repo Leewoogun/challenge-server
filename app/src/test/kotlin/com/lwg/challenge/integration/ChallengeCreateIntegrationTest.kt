@@ -327,11 +327,11 @@ class ChallengeCreateIntegrationTest {
             .andExpect(jsonPath("$.data.activeChallenges.length()").value(1))
             .andExpect(jsonPath("$.data.activeChallenges[0].challengeId").value(challengeId))
             // 내가 opponent 이므로 myMission 은 내가 방금 입력한 값.
-            .andExpect(jsonPath("$.data.activeChallenges[0].myMission").value("책 30페이지 읽기"))
-            .andExpect(jsonPath("$.data.activeChallenges[0].opponentMission").value("운동 1시간"))
-            .andExpect(jsonPath("$.data.activeChallenges[0].opponentNickname").value("민수"))
-            .andExpect(jsonPath("$.data.activeChallenges[0].myVerificationStatus").value("PENDING"))
-            .andExpect(jsonPath("$.data.activeChallenges[0].opponentVerificationStatus").value("PENDING"))
+            .andExpect(jsonPath("$.data.activeChallenges[0].me.mission").value("책 30페이지 읽기"))
+            .andExpect(jsonPath("$.data.activeChallenges[0].opponent.mission").value("운동 1시간"))
+            .andExpect(jsonPath("$.data.activeChallenges[0].opponent.nickname").value("민수"))
+            .andExpect(jsonPath("$.data.activeChallenges[0].me.verificationStatus").value("PENDING"))
+            .andExpect(jsonPath("$.data.activeChallenges[0].opponent.verificationStatus").value("PENDING"))
 
         mockMvc.perform(
             MockMvcRequestBuilders.get("/api/v1/challenges/received").header("Authorization", "Bearer $token"),
