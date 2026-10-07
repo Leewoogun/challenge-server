@@ -25,7 +25,7 @@ import java.time.LocalDateTime
  * - `LocalDateTime` → `@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")` (ADR-0010). **`T` 도 `Z` 도 오프셋도 밀리초도 없다.**
  *   모바일은 이 패턴 전용 커스텀 파서를 쓰며 `T` 구분자가 오면 **실패한다**(실패하는 것 자체가 테스트로 고정돼 있다).
  *   즉 서버가 표기를 흘리면 조용히 통과하지 않는다.
- * - `challengerProfileImageUrl` 외의 필드는 절대 null / 누락으로 내보내지 않는다.
+ * - `opponent.profileImageUrl` 외의 필드는 절대 null / 누락으로 내보내지 않는다.
  *   모바일 DTO 가 전 필드에 기본값을 두는 방어적 패턴이라 누락이 빈 카드로 조용히 삼켜진다.
  */
 
@@ -103,15 +103,6 @@ data class ReceivedChallengesData(
 data class ReceivedChallengeItem(
     @field:Schema(example = "7")
     val challengeId: Long,
-    @field:Schema(example = "42")
-    val challengerId: Long,
-    @field:Schema(example = "민수")
-    val challengerNickname: String,
-    /** **nullable** — 카카오 프로필 미설정 가능. 본 응답에서 유일하게 null 이 될 수 있는 필드. */
-    @field:Schema(example = "https://cdn/u/42.jpg", nullable = true)
-    val challengerProfileImageUrl: String?,
-    @field:Schema(example = "오늘 운동 1시간 하기")
-    val challengerMission: String,
     @field:Schema(example = "커피 사기")
     val betContent: String,
     @field:Schema(example = "2026-07-28")
@@ -123,6 +114,27 @@ data class ReceivedChallengeItem(
     @field:Schema(example = "2026-07-28 11:11:00", description = "KST 기준. 초 단위로 절삭")
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = WIRE_DATETIME)
     val createdAt: LocalDateTime,
+    val opponent: ReceivedChallengeOpponentDto,
+)
+
+/**
+ * 도전장을 보낸 사람. 받은 도전장은 `opponent_id = :me` 로만 조회되므로 DB 상 challenger 가
+ * 항상 **내 시점의 상대**다 — 홈 진행 중 목록의 `opponent` 와 같은 이름으로 맞춘다.
+ *
+ * [mission] 은 DB 상 `challenges.challenger_mission` 이지만 "상대가 스스로에게 건 미션" 이라
+ * 화면에서 상대 정보와 한 덩어리로 읽혀 이 안에 둔다.
+ */
+@Schema(description = "도전장을 보낸 상대")
+data class ReceivedChallengeOpponentDto(
+    @field:Schema(example = "42")
+    val id: Long,
+    @field:Schema(example = "민수")
+    val nickname: String,
+    /** **nullable** — 카카오 프로필 미설정 가능. 본 응답에서 유일하게 null 이 될 수 있는 필드. */
+    @field:Schema(example = "https://cdn/u/42.jpg", nullable = true)
+    val profileImageUrl: String?,
+    @field:Schema(example = "오늘 운동 1시간 하기")
+    val mission: String,
 )
 
 // ─── 3. POST /api/v1/challenges/{id}/accept ──────────────────────

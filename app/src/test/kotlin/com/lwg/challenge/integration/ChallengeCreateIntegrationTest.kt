@@ -235,10 +235,10 @@ class ChallengeCreateIntegrationTest {
         )
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.challenges.length()").value(1))
-            .andExpect(jsonPath("$.data.challenges[0].challengerId").value(friend.id!!))
-            .andExpect(jsonPath("$.data.challenges[0].challengerNickname").value("민수"))
-            .andExpect(jsonPath("$.data.challenges[0].challengerProfileImageUrl").value("https://cdn/u/2.jpg"))
-            .andExpect(jsonPath("$.data.challenges[0].challengerMission").value("운동 1시간"))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.id").value(friend.id!!))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.nickname").value("민수"))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.profileImageUrl").value("https://cdn/u/2.jpg"))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.mission").value("운동 1시간"))
             .andExpect(jsonPath("$.data.challenges[0].betContent").value("커피 사기"))
     }
 

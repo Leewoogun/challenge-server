@@ -15,6 +15,7 @@ import com.lwg.challenge.controller.challenge.dto.CreateChallengeBody
 import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeData
 import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeResponse
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengeItem
+import com.lwg.challenge.controller.challenge.dto.ReceivedChallengeOpponentDto
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesData
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesResponse
 import com.lwg.challenge.controller.challenge.dto.RejectChallengeResponse
@@ -259,15 +260,18 @@ class ChallengeCommandController(
 
     private fun ReceivedChallenge.toDto(): ReceivedChallengeItem = ReceivedChallengeItem(
         challengeId = challengeId,
-        challengerId = challengerId,
-        challengerNickname = challengerNickname,
-        challengerProfileImageUrl = challengerProfileImageUrl,
-        challengerMission = challengerMission,
         betContent = betContent,
         challengeDate = challengeDate,
         deadline = deadline,
         // 나노초 자릿수가 섞이지 않도록 초 단위 절삭 (api-contract 확정).
         createdAt = createdAt.truncatedTo(ChronoUnit.SECONDS),
+        // 받은 도전장은 opponent_id = :me 로만 조회되므로 challenger 가 곧 내 시점의 상대다.
+        opponent = ReceivedChallengeOpponentDto(
+            id = challengerId,
+            nickname = challengerNickname,
+            profileImageUrl = challengerProfileImageUrl,
+            mission = challengerMission,
+        ),
     )
 
     companion object {

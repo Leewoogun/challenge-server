@@ -31,6 +31,7 @@ import com.lwg.challenge.controller.challenge.dto.PartyVerificationDto
 import com.lwg.challenge.controller.challenge.dto.SubmitVerificationData
 import com.lwg.challenge.controller.challenge.dto.SubmitVerificationResponse
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengeItem
+import com.lwg.challenge.controller.challenge.dto.ReceivedChallengeOpponentDto
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesData
 import com.lwg.challenge.controller.challenge.dto.ReceivedChallengesResponse
 import com.lwg.challenge.controller.common.BaseResponse
@@ -570,21 +571,23 @@ class WireShapeContractTest {
     }
 
     @Test
-    fun `ReceivedChallengesResponse - 받은 도전장 8필드`() {
+    fun `ReceivedChallengesResponse - 받은 도전장 6필드 + opponent 객체`() {
         val data = dataOf(
             ReceivedChallengesResponse(
                 ReceivedChallengesData(
                     listOf(
                         ReceivedChallengeItem(
                             challengeId = 1L,
-                            challengerId = 2L,
-                            challengerNickname = "n",
-                            challengerProfileImageUrl = null,
-                            challengerMission = "m",
                             betContent = "b",
                             challengeDate = LocalDate.of(2026, 8, 6),
                             deadline = LocalDateTime.of(2026, 8, 7, 0, 0),
                             createdAt = LocalDateTime.of(2026, 8, 6, 12, 0),
+                            opponent = ReceivedChallengeOpponentDto(
+                                id = 2L,
+                                nickname = "n",
+                                profileImageUrl = null,
+                                mission = "m",
+                            ),
                         ),
                     ),
                 ),
@@ -592,12 +595,14 @@ class WireShapeContractTest {
         )
         assertKeys(setOf("challenges"), data, "ReceivedChallengesData")
         assertKeys(
-            setOf(
-                "challengeId", "challengerId", "challengerNickname", "challengerProfileImageUrl",
-                "challengerMission", "betContent", "challengeDate", "deadline", "createdAt",
-            ),
+            setOf("challengeId", "betContent", "challengeDate", "deadline", "createdAt", "opponent"),
             data.path("challenges").first(),
             "ReceivedChallengeItem",
+        )
+        assertKeys(
+            setOf("id", "nickname", "profileImageUrl", "mission"),
+            data.path("challenges").first().path("opponent"),
+            "ReceivedChallengeOpponentDto",
         )
     }
 

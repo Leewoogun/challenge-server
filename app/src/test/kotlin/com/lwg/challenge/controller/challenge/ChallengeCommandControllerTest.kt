@@ -236,10 +236,10 @@ class ChallengeCommandControllerTest {
             .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
             .andExpect(jsonPath("$.data.challenges.length()").value(1))
             .andExpect(jsonPath("$.data.challenges[0].challengeId").value(7))
-            .andExpect(jsonPath("$.data.challenges[0].challengerId").value(42))
-            .andExpect(jsonPath("$.data.challenges[0].challengerNickname").value("민수"))
-            .andExpect(jsonPath("$.data.challenges[0].challengerProfileImageUrl").value("https://cdn/u/42.jpg"))
-            .andExpect(jsonPath("$.data.challenges[0].challengerMission").value("오늘 운동 1시간 하기"))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.id").value(42))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.nickname").value("민수"))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.profileImageUrl").value("https://cdn/u/42.jpg"))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.mission").value("오늘 운동 1시간 하기"))
             .andExpect(jsonPath("$.data.challenges[0].betContent").value("커피 사기"))
             .andExpect(jsonPath("$.data.challenges[0].challengeDate").value("2026-07-28"))
             .andExpect(jsonPath("$.data.challenges[0].deadline").value("2026-07-29 00:00:00"))
@@ -267,9 +267,9 @@ class ChallengeCommandControllerTest {
 
         mockMvc.perform(get("/api/v1/challenges/received"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data.challenges[0].challengerProfileImageUrl").doesNotExist())
+            .andExpect(jsonPath("$.data.challenges[0].opponent.profileImageUrl").doesNotExist())
             // nullable 이 아닌 필드는 계속 존재해야 한다.
-            .andExpect(jsonPath("$.data.challenges[0].challengerNickname").value("민수"))
+            .andExpect(jsonPath("$.data.challenges[0].opponent.nickname").value("민수"))
     }
 
     @Test
