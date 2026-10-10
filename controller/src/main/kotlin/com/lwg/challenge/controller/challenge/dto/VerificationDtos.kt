@@ -41,22 +41,22 @@ data class ChallengeVerificationsResponse(
 ) : BaseResponse()
 
 /**
- * `challenger`/`opponent` 를 **역할 그대로** 준다 — `GET /challenges/{id}` 와 같은 시점이라
- * 두 응답을 상세 화면에서 합칠 때 뒤집기 계산이 없다 (soul-oath api-contract §3 과 같은 판단).
+ * **요청자 기준(`me`/`opponent`)** 으로 준다 — `GET /challenges/{id}` 와 같은 시점이라
+ * 두 응답을 상세 화면에서 합칠 때 뒤집기 계산이 없다.
+ *
+ * 🔴 `photoUrl` 의 `{party}` 조각(`/photos/challenger`)은 **역할 기준 그대로**다. 앱은 이 경로를
+ *    열기만 하고 해석하지 않으므로 `me` 칸에 `/photos/opponent` 가 들어 있어도 정상이다.
  */
 @Schema(description = "챌린지 인증 현황")
 data class ChallengeVerificationsData(
     @field:Schema(example = "7")
     val challengeId: Long,
-    val challenger: PartyVerificationDto,
+    val me: PartyVerificationDto,
     val opponent: PartyVerificationDto,
 )
 
 @Schema(description = "한 사람의 인증 상태")
 data class PartyVerificationDto(
-    @field:Schema(example = "1")
-    val userId: Long,
-
     @field:Schema(example = "VERIFIED", description = "PENDING / VERIFIED / FAILED. row 가 없으면 PENDING")
     val status: VerificationStatus,
 

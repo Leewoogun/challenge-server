@@ -195,11 +195,11 @@ class VerificationControllerTest {
     // ─── §4 조회 ─────────────────────────────────────────────────
 
     @Test
-    fun `양측을 역할 그대로 내려주고 VERIFIED 인 쪽만 상대 경로를 갖는다`() {
+    fun `요청자 기준 me 와 opponent 로 내려주고 VERIFIED 인 쪽만 상대 경로를 갖는다`() {
         Mockito.`when`(verificationService.getVerifications(anyLong(), anyLong())).thenReturn(
             VerificationsView(
                 challengeId = 7L,
-                challenger = PartyVerificationView(
+                me = PartyVerificationView(
                     userId = 1L,
                     status = VerificationStatus.VERIFIED,
                     photoUrl = "/api/v1/challenges/7/photos/challenger",
@@ -221,11 +221,13 @@ class VerificationControllerTest {
         mockMvc.perform(get("/api/v1/challenges/7/verifications"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.challengeId").value(7))
-            .andExpect(jsonPath("$.data.challenger.userId").value(1))
-            .andExpect(jsonPath("$.data.challenger.status").value("VERIFIED"))
+            // userId 는 내리지 않는다 — 앱은 어느 칸이 내 것인지 고르는 데만 썼다.
+            .andExpect(jsonPath("$.data.me.userId").doesNotExist())
+            .andExpect(jsonPath("$.data.challenger").doesNotExist())
+            .andExpect(jsonPath("$.data.me.status").value("VERIFIED"))
             // 🔴 만료 없는 **상대 경로** 그대로 나간다 — 앱이 자기 baseUrl 에 붙인다.
-            .andExpect(jsonPath("$.data.challenger.photoUrl").value("/api/v1/challenges/7/photos/challenger"))
-            .andExpect(jsonPath("$.data.challenger.verifiedAt").value("2026-08-14 15:32:10"))
+            .andExpect(jsonPath("$.data.me.photoUrl").value("/api/v1/challenges/7/photos/challenger"))
+            .andExpect(jsonPath("$.data.me.verifiedAt").value("2026-08-14 15:32:10"))
             .andExpect(jsonPath("$.data.opponent.status").value("PENDING"))
     }
 
@@ -240,7 +242,7 @@ class VerificationControllerTest {
         Mockito.`when`(verificationService.getVerifications(anyLong(), anyLong())).thenReturn(
             VerificationsView(
                 challengeId = 7L,
-                challenger = PartyVerificationView(1L, VerificationStatus.PENDING, null, null, photoDeleted = false, aiReason = null),
+                me = PartyVerificationView(1L, VerificationStatus.PENDING, null, null, photoDeleted = false, aiReason = null),
                 opponent = PartyVerificationView(14L, VerificationStatus.PENDING, null, null, photoDeleted = false, aiReason = null),
             ),
         )
@@ -267,7 +269,7 @@ class VerificationControllerTest {
         Mockito.`when`(verificationService.getVerifications(anyLong(), anyLong())).thenReturn(
             VerificationsView(
                 challengeId = 7L,
-                challenger = PartyVerificationView(
+                me = PartyVerificationView(
                     userId = 1L,
                     status = VerificationStatus.VERIFIED,
                     photoUrl = null,
@@ -282,9 +284,9 @@ class VerificationControllerTest {
         val body = mockMvc.perform(get("/api/v1/challenges/7/verifications"))
             .andExpect(status().isOk)
             // 탈퇴는 row 를 보존한다 — status 와 verifiedAt 은 그대로다 (mypage T-B2).
-            .andExpect(jsonPath("$.data.challenger.status").value("VERIFIED"))
-            .andExpect(jsonPath("$.data.challenger.verifiedAt").value("2026-08-14 15:32:10"))
-            .andExpect(jsonPath("$.data.challenger.photoDeleted").value(true))
+            .andExpect(jsonPath("$.data.me.status").value("VERIFIED"))
+            .andExpect(jsonPath("$.data.me.verifiedAt").value("2026-08-14 15:32:10"))
+            .andExpect(jsonPath("$.data.me.photoDeleted").value(true))
             .andExpect(jsonPath("$.data.opponent.photoDeleted").value(false))
             .andReturn().response.contentAsString
 

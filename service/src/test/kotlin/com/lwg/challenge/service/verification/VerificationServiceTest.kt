@@ -520,15 +520,20 @@ class VerificationServiceTest {
     // ─── 조회 (T-B3) ─────────────────────────────────────────────
 
     @Test
-    fun `조회는 양측을 역할 그대로 준다`() {
+    fun `조회는 요청자 기준으로 뒤집어 준다`() {
         service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
 
-        val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
+        val asOpponent = service.getVerifications(OPPONENT, CHALLENGE_ID)
+        assertEquals(OPPONENT, asOpponent.me.userId)
+        assertEquals(CHALLENGER, asOpponent.opponent.userId)
+        assertEquals(VerificationStatus.PENDING, asOpponent.me.status)
+        assertEquals(VerificationStatus.VERIFIED, asOpponent.opponent.status)
 
-        assertEquals(CHALLENGER, view.challenger.userId)
-        assertEquals(OPPONENT, view.opponent.userId)
-        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
-        assertEquals(VerificationStatus.PENDING, view.opponent.status)
+        val asChallenger = service.getVerifications(CHALLENGER, CHALLENGE_ID)
+        assertEquals(CHALLENGER, asChallenger.me.userId)
+        assertEquals(OPPONENT, asChallenger.opponent.userId)
+        assertEquals(VerificationStatus.VERIFIED, asChallenger.me.status)
+        assertEquals(VerificationStatus.PENDING, asChallenger.opponent.status)
     }
 
     /**
@@ -541,9 +546,9 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
 
-        assertEquals("/api/v1/challenges/$CHALLENGE_ID/photos/challenger", view.challenger.photoUrl)
-        assertNotNull(view.challenger.verifiedAt)
-        assertNull(view.opponent.photoUrl, "아직 안 올린 쪽에는 경로가 없다")
+        assertEquals("/api/v1/challenges/$CHALLENGE_ID/photos/challenger", view.opponent.photoUrl)
+        assertNotNull(view.opponent.verifiedAt)
+        assertNull(view.me.photoUrl, "아직 안 올린 쪽에는 경로가 없다")
     }
 
     /** 반대쪽도 같은 규칙 — opponent 가 인증하면 opponent 경로가 나간다. */
@@ -554,7 +559,7 @@ class VerificationServiceTest {
         val view = service.getVerifications(CHALLENGER, CHALLENGE_ID)
 
         assertEquals("/api/v1/challenges/$CHALLENGE_ID/photos/opponent", view.opponent.photoUrl)
-        assertNull(view.challenger.photoUrl)
+        assertNull(view.me.photoUrl)
     }
 
     /** 🔴 spec 수용 기준: *"당사자가 아니면 사진을 볼 수 없다 — 제3자 요청은 거부된다."* */
@@ -578,8 +583,8 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(CHALLENGER, CHALLENGE_ID)
 
-        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
-        assertNotNull(view.challenger.photoUrl)
+        assertEquals(VerificationStatus.VERIFIED, view.me.status)
+        assertNotNull(view.me.photoUrl)
     }
 
     /** row 자체가 없으면 PENDING 으로 간주한다 (`Verification` KDoc). */
@@ -590,9 +595,9 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(CHALLENGER, CHALLENGE_ID)
 
-        assertEquals(VerificationStatus.PENDING, view.challenger.status)
+        assertEquals(VerificationStatus.PENDING, view.me.status)
         assertEquals(VerificationStatus.PENDING, view.opponent.status)
-        assertNull(view.challenger.photoUrl)
+        assertNull(view.me.photoUrl)
     }
 
     // ─── photoDeleted (mypage T-B1 부록 A) ───────────────────────
@@ -614,10 +619,10 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
 
-        assertTrue(view.challenger.photoDeleted, "탈퇴로 지워진 사진은 photoDeleted = true 여야 한다")
+        assertTrue(view.opponent.photoDeleted, "탈퇴로 지워진 사진은 photoDeleted = true 여야 한다")
         // 기존 필드의 의미는 하나도 바뀌지 않는다 — 순수 추가다.
-        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
-        assertNull(view.challenger.photoUrl, "key 가 없으므로 경로도 없다")
+        assertEquals(VerificationStatus.VERIFIED, view.opponent.status)
+        assertNull(view.opponent.photoUrl, "key 가 없으므로 경로도 없다")
     }
 
     @Test
@@ -626,8 +631,8 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
 
-        assertEquals(false, view.challenger.photoDeleted)
-        assertNotNull(view.challenger.photoUrl)
+        assertEquals(false, view.opponent.photoDeleted)
+        assertNotNull(view.opponent.photoUrl)
     }
 
     /**
@@ -647,7 +652,7 @@ class VerificationServiceTest {
 
         assertEquals(
             false,
-            view.challenger.photoDeleted,
+            view.opponent.photoDeleted,
             "탈퇴가 아닌 key 부재는 데이터 이상이다 — 탈퇴자 뒤에 숨기면 영영 발견하지 못한다",
         )
     }
@@ -682,9 +687,9 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
 
-        assertEquals(VerificationStatus.FAILED, view.challenger.status)
-        assertNotNull(view.challenger.photoUrl, "반려돼도 사진은 보여야 한다 — 판정의 근거다")
-        assertEquals(false, view.challenger.photoDeleted, "지워진 것이 아니라 반려된 것이다")
+        assertEquals(VerificationStatus.FAILED, view.opponent.status)
+        assertNotNull(view.opponent.photoUrl, "반려돼도 사진은 보여야 한다 — 판정의 근거다")
+        assertEquals(false, view.opponent.photoDeleted, "지워진 것이 아니라 반려된 것이다")
     }
 
     @Test
@@ -724,7 +729,7 @@ class VerificationServiceTest {
         val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
 
         assertTrue(
-            view.challenger.photoDeleted,
+            view.opponent.photoDeleted,
             "status 가 FAILED 라는 이유로 '삭제됨' 을 놓치면 데이터 이상과 구분되지 않는다",
         )
     }
@@ -748,8 +753,8 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
 
-        assertNull(view.challenger.aiReason, "통과 사유가 반려 문구로 사용자에게 나가면 안 된다")
-        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
+        assertNull(view.opponent.aiReason, "통과 사유가 반려 문구로 사용자에게 나가면 안 된다")
+        assertEquals(VerificationStatus.VERIFIED, view.opponent.status)
     }
 
     /** 🔴 무키 상태(NoOp)의 제출 전건이 이 경로를 탄다 — 내부 운영 문구가 새면 안 된다. */
@@ -758,7 +763,7 @@ class VerificationServiceTest {
         service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
         recordAiVerdict(CHALLENGER, VerdictOutcome.UNVERIFIABLE, 0.0, "AI 검증이 비활성 상태입니다 (API 키 미설정)")
 
-        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).opponent.aiReason)
     }
 
     /** 🔴 예외 메시지가 사용자 화면에 나가는 경로를 막는다. */
@@ -767,7 +772,7 @@ class VerificationServiceTest {
         service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
         recordAiVerdict(CHALLENGER, VerdictOutcome.ERROR, 0.0, "검증 중 예외: Connection reset by peer")
 
-        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).opponent.aiReason)
     }
 
     @Test
@@ -775,7 +780,7 @@ class VerificationServiceTest {
         service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
         recordAiVerdict(CHALLENGER, VerdictOutcome.UNCERTAIN, 0.9, "판단이 서지 않습니다")
 
-        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+        assertNull(service.getVerifications(OPPONENT, CHALLENGE_ID).opponent.aiReason)
     }
 
     /**
@@ -791,8 +796,8 @@ class VerificationServiceTest {
 
         val view = service.getVerifications(OPPONENT, CHALLENGE_ID)
 
-        assertNull(view.challenger.aiReason, "통과시킨 건이므로 반려 사유가 아니다")
-        assertEquals(VerificationStatus.VERIFIED, view.challenger.status)
+        assertNull(view.opponent.aiReason, "통과시킨 건이므로 반려 사유가 아니다")
+        assertEquals(VerificationStatus.VERIFIED, view.opponent.status)
     }
 
     /** 반려 확정 건은 실린다 — 게이트가 전부 막아버리지 않았음을 고정한다. */
@@ -801,7 +806,7 @@ class VerificationServiceTest {
         service.submit(CHALLENGER, CHALLENGE_ID, JPEG)
         rejectByAi(CHALLENGER)
 
-        assertEquals("미션과 무관한 사진", service.getVerifications(OPPONENT, CHALLENGE_ID).challenger.aiReason)
+        assertEquals("미션과 무관한 사진", service.getVerifications(OPPONENT, CHALLENGE_ID).opponent.aiReason)
     }
 
     /** 판정 로그만 심는다 — `status` 는 건드리지 않는다(반려가 아닌 경우를 만들기 위함). */

@@ -167,8 +167,8 @@ class VerificationService(
      * 경로를 숨기는 것이 아니라 [readPhoto] 의 요청 시점 검사다 — 경로는 추측 가능한 고정
      * 형태이고, 제3자가 알아내도 사진을 열 수 없다.
      *
-     * `challenger`/`opponent` 를 **역할 그대로** 준다 — `ChallengeDetailService` 와 같은 시점이라
-     * 상세 화면에서 두 응답을 합칠 때 뒤집기 계산이 없다.
+     * **요청자 기준(`me`/`opponent`)으로 뒤집어** 준다 — `ChallengeDetailService` 와 같은 시점이라
+     * 상세 화면에서 두 응답을 합칠 때 앱이 뒤집기 계산을 하지 않는다.
      *
      * `IN_PROGRESS` 를 요구하지 않는다. 챌린지가 끝난 뒤에도 *"그때 뭘 올렸는지"* 는 보여야 한다.
      * row 가 없으면(수락 전) 양쪽 다 `PENDING` 으로 나간다 — `Verification` KDoc 의
@@ -189,22 +189,27 @@ class VerificationService(
             .associateBy { it.userId }
         val users = userRepository.findAllByIds(setOf(challenge.challengerId, challenge.opponentId))
 
+        val challengerView = view(
+            challengeId = challengeId,
+            party = VerificationParty.CHALLENGER,
+            userId = challenge.challengerId,
+            verification = byUser[challenge.challengerId],
+            ownerStatus = users[challenge.challengerId]?.status,
+        )
+        val opponentView = view(
+            challengeId = challengeId,
+            party = VerificationParty.OPPONENT,
+            userId = challenge.opponentId,
+            verification = byUser[challenge.opponentId],
+            ownerStatus = users[challenge.opponentId]?.status,
+        )
+        // 요청자 시점으로 뒤집는다. photoUrl 의 `{party}` 조각은 역할 그대로 둔다 — 앱은 경로를
+        // 열기만 하고 해석하지 않는다.
+        val isChallenger = me == challenge.challengerId
         return VerificationsView(
             challengeId = challengeId,
-            challenger = view(
-                challengeId = challengeId,
-                party = VerificationParty.CHALLENGER,
-                userId = challenge.challengerId,
-                verification = byUser[challenge.challengerId],
-                ownerStatus = users[challenge.challengerId]?.status,
-            ),
-            opponent = view(
-                challengeId = challengeId,
-                party = VerificationParty.OPPONENT,
-                userId = challenge.opponentId,
-                verification = byUser[challenge.opponentId],
-                ownerStatus = users[challenge.opponentId]?.status,
-            ),
+            me = if (isChallenger) challengerView else opponentView,
+            opponent = if (isChallenger) opponentView else challengerView,
         )
     }
 
@@ -560,9 +565,10 @@ sealed interface PhotoReadResult {
 }
 
 /** 양측 인증 상태. `challenger`/`opponent` 를 역할 그대로 담는다. */
+/** 요청자 기준 인증 현황. [me] 는 요청자, [opponent] 는 상대다 (역할과 무관). */
 data class VerificationsView(
     val challengeId: Long,
-    val challenger: PartyVerificationView,
+    val me: PartyVerificationView,
     val opponent: PartyVerificationView,
 )
 

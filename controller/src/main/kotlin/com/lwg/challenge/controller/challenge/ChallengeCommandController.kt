@@ -6,6 +6,7 @@ import com.lwg.challenge.controller.challenge.dto.CancelChallengeData
 import com.lwg.challenge.controller.challenge.dto.ChallengeDetailData
 import com.lwg.challenge.controller.challenge.dto.ChallengeDetailResponse
 import com.lwg.challenge.controller.challenge.dto.ContractDto
+import com.lwg.challenge.controller.challenge.dto.MyPartyDto
 import com.lwg.challenge.controller.challenge.dto.PartyDto
 import com.lwg.challenge.controller.challenge.dto.CancelChallengeResponse
 import com.lwg.challenge.controller.challenge.dto.ChallengeCreateData
@@ -67,8 +68,8 @@ class ChallengeCommandController(
     @GetMapping("/challenges/{id}")
     @Operation(
         summary = "챌린지 상세 (계약서 + 양측 서명)",
-        description = "당사자만 조회 가능. challenger/opponent 를 **역할 그대로** 반환한다 — " +
-            "계약서 화면은 양쪽을 다 그리므로 \"나/상대\" 로 뒤집지 않는다. 미서명 필드는 null.",
+        description = "당사자만 조회 가능. 요청자 기준 me/opponent 로 반환한다 — " +
+            "myResult 는 내 시점 결과, forfeitedBy 는 ME/OPPONENT. 미서명 필드는 null.",
     )
     @SecurityRequirement(name = "bearerAuth")
     fun getDetail(
@@ -80,17 +81,16 @@ class ChallengeCommandController(
             data = ChallengeDetailData(
                 challengeId = view.challengeId,
                 status = ChallengeStatus.valueOf(view.status),
-                // 역할 기준 그대로 (계약 §1). COMPLETED 가 아니면 서비스가 null 을 준다.
-                result = view.result,
+                // 요청자 시점으로 뒤집기는 서비스가 이미 끝냈다. COMPLETED 가 아니면 null.
+                myResult = view.myResult,
                 forfeitedBy = view.forfeitedBy,
                 challengeDate = view.challengeDate,
                 deadline = view.deadline,
                 betContent = view.betContent,
-                challenger = PartyDto(
-                    userId = view.challenger.userId,
-                    nickname = view.challenger.nickname,
-                    profileImageUrl = view.challenger.profileImageUrl,
-                    mission = view.challenger.mission,
+                me = MyPartyDto(
+                    nickname = view.me.nickname,
+                    profileImageUrl = view.me.profileImageUrl,
+                    mission = view.me.mission,
                 ),
                 opponent = PartyDto(
                     userId = view.opponent.userId,
@@ -102,8 +102,8 @@ class ChallengeCommandController(
                     ContractDto(
                         content = it.content,
                         isFinalized = it.isFinalized,
-                        challengerSignature = it.challengerSignature,
-                        challengerSignedAt = it.challengerSignedAt,
+                        mySignature = it.mySignature,
+                        mySignedAt = it.mySignedAt,
                         opponentSignature = it.opponentSignature,
                         opponentSignedAt = it.opponentSignedAt,
                     )

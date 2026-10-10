@@ -1,7 +1,8 @@
 package com.lwg.challenge.controller.challenge
 
 import com.lwg.challenge.controller.common.exception.GlobalExceptionHandler
-import com.lwg.challenge.domain.challenge.ChallengeResult
+import com.lwg.challenge.domain.challenge.Outcome
+import com.lwg.challenge.domain.challenge.RelativeParty
 import com.lwg.challenge.domain.common.ResponseCode
 import com.lwg.challenge.domain.common.exception.OneButtonDialogException
 import com.lwg.challenge.domain.common.exception.SnackbarException
@@ -86,7 +87,7 @@ class ChallengeDetailControllerTest {
     // ─── 1. 정상 (모든 필드 채워짐) ───────────────────────────────
 
     @Test
-    fun `양측 서명된 계약서를 역할 그대로 반환한다`() {
+    fun `양측 서명된 계약서를 요청자 기준으로 반환한다`() {
         Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(fullView())
 
         mockMvc.perform(get("/api/v1/challenges/7"))
@@ -94,13 +95,16 @@ class ChallengeDetailControllerTest {
             .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
             .andExpect(jsonPath("$.data.challengeId").value(7))
             .andExpect(jsonPath("$.data.status").value("IN_PROGRESS"))
-            // 역할 그대로 — "나/상대" 로 뒤집지 않는다 (계약 §3)
-            .andExpect(jsonPath("$.data.challenger.userId").value(1))
+            // 요청자 기준 — me 는 userId 를 내리지 않고, opponent 만 userId 가 있다.
+            .andExpect(jsonPath("$.data.me.nickname").value("이우건"))
+            .andExpect(jsonPath("$.data.me.userId").doesNotExist())
             .andExpect(jsonPath("$.data.opponent.userId").value(14))
+            .andExpect(jsonPath("$.data.challenger").doesNotExist())
             // ADR-0010 wire 포맷
             .andExpect(jsonPath("$.data.deadline").value("2026-08-04 00:00:00"))
             .andExpect(jsonPath("$.data.challengeDate").value("2026-08-03"))
-            .andExpect(jsonPath("$.data.contract.challengerSignedAt").value("2026-08-03 11:20:00"))
+            .andExpect(jsonPath("$.data.contract.mySignedAt").value("2026-08-03 11:20:00"))
+            .andExpect(jsonPath("$.data.contract.opponentSignedAt").value("2026-08-03 11:25:00"))
     }
 
     @Test
@@ -113,13 +117,13 @@ class ChallengeDetailControllerTest {
 
         // 🔴 @JsonRawValue 가 다시 붙으면 **객체**로 나가고, 모바일이 JsonElement 재인코딩을 타
         //    §4.2 무손실이 깨진다. 이스케이프된 문자열인지 원문으로 확인한다.
-        //    문자열이면 `"challengerSignature":"{\"v\":1...`  /  객체면 `"challengerSignature":{"v":1...`
+        //    문자열이면 `"mySignature":"{\"v\":1...`  /  객체면 `"mySignature":{"v":1...`
         assertTrue(
-            body.contains("\"challengerSignature\":\"{\\\"v\\\":1"),
+            body.contains("\"mySignature\":\"{\\\"v\\\":1"),
             "서명이 이스케이프된 JSON 문자열이어야 한다(객체 아님). actual=$body",
         )
         assertTrue(
-            !body.contains("\"challengerSignature\":{"),
+            !body.contains("\"mySignature\":{"),
             "서명이 객체로 나가고 있다 — @JsonRawValue 가 붙었는지 확인해라. actual=$body",
         )
     }
@@ -139,7 +143,7 @@ class ChallengeDetailControllerTest {
             .andExpect(jsonPath("$.code").value(ResponseCode.SUCCESS))
             // 나머지 필드는 정상이어야 한다 — 화면 전체가 깨지면 안 된다.
             .andExpect(jsonPath("$.data.challengeId").value(7))
-            .andExpect(jsonPath("$.data.challenger.nickname").value("이우건"))
+            .andExpect(jsonPath("$.data.me.nickname").value("이우건"))
             .andReturn().response.getContentAsString(Charsets.UTF_8)
 
         assertTrue(
@@ -190,7 +194,7 @@ class ChallengeDetailControllerTest {
         // 여기서 합성해 mobile-dev 픽스처의 원본으로 넘긴다 (#24 Q3).
         Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(
             fullView().copy(
-                challenger = fullView().challenger.copy(profileImageUrl = null, mission = null),
+                me = fullView().me.copy(profileImageUrl = null, mission = null),
                 opponent = fullView().opponent.copy(profileImageUrl = null, mission = null),
                 contract = null,
             ),
@@ -210,25 +214,19 @@ class ChallengeDetailControllerTest {
     // ─── 3.5 판정 결과 (challenge-result 계약 §1) ─────────────────
 
     /**
-     * 🔴 `result` 는 **역할 기준**으로 나간다 — `CHALLENGER_WIN` 을 "내가 이겼다" 로 뒤집지 않는다.
-     *
-     * 조회자(`meId = 42`)는 challenger(1) 도 opponent(14) 도 아닌 값이지만 응답은 그대로 역할
-     * 기준이다. 상세는 계약서 화면이라 `challenger`/`opponent` 를 역할 그대로 주고 있고(§3),
-     * result 만 시점을 달리하면 **같은 응답 안에 두 기준이 섞인다.** 뒤집는 것은 홈 카드
-     * (`/challenges/active` 의 `myResult`)의 몫이다.
-     *
-     * COMPLETED 가 아닐 때 null 이라는 짝은 위쪽 케이스들이 이미 덮는다(모든 `fullView()` 가
-     * IN_PROGRESS + `result = null`) — 여기서는 원문에 키가 남는지까지 함께 본다.
+     * `myResult` 는 **내 시점**으로 나가고, 판정 전에는 키가 남은 채 null 이다.
+     * 역할 기준 `result` 는 더 이상 나가지 않는다.
      */
     @Test
-    fun `판정되면 result 가 역할 기준으로 나가고 그 전에는 키 존재 + null 이다`() {
+    fun `판정되면 myResult 가 내 시점으로 나가고 그 전에는 키 존재 + null 이다`() {
         Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong()))
-            .thenReturn(fullView().copy(status = "COMPLETED", result = ChallengeResult.CHALLENGER_WIN))
+            .thenReturn(fullView().copy(status = "COMPLETED", myResult = Outcome.WIN))
 
         mockMvc.perform(get("/api/v1/challenges/7"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.status").value("COMPLETED"))
-            .andExpect(jsonPath("$.data.result").value("CHALLENGER_WIN"))
+            .andExpect(jsonPath("$.data.myResult").value("WIN"))
+            .andExpect(jsonPath("$.data.result").doesNotExist())
 
         // 판정 전 — 키는 남고 값만 null 이다 (#24 와 같은 축).
         Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(fullView())
@@ -239,35 +237,30 @@ class ChallengeDetailControllerTest {
             .andReturn().response.getContentAsString(Charsets.UTF_8)
 
         assertTrue(
-            body.contains(""""result":null"""),
+            body.contains(""""myResult":null"""),
             "키가 빠지면 모바일 실패 모드가 MissingFieldException 으로 바뀐다. actual=$body",
         )
     }
 
     /**
-     * 🔴 **`forfeitedBy` 는 userId 로 나가고, 기권이 없으면 키가 남은 채 null 이다**
-     * (challenge-forfeit 계약 §2).
-     *
-     * 불리언이 아니어야 하는 이유가 이 응답에 그대로 걸려 있다 — 앱은 이 값을
-     * `challenger.userId` / `opponent.userId` 와 **비교만** 하면 *"누가 기권했나"* 를 안다.
-     * 불리언이면 `result` 로 역산해야 하고, 그건 판정 규칙의 사본을 앱에 심는 것이다.
+     * 🔴 **`forfeitedBy` 는 `ME` / `OPPONENT` 로 나가고, 기권이 없으면 키가 남은 채 null 이다**
+     * (challenge-forfeit 계약 §2). 앱은 userId 비교 없이 "누가 기권했나" 를 바로 그린다.
      */
     @Test
-    fun `기권으로 끝난 챌린지는 forfeitedBy 에 기권자 userId 가 나가고 아니면 키 존재 + null 이다`() {
+    fun `기권으로 끝난 챌린지는 forfeitedBy 에 기권한 쪽이 나가고 아니면 키 존재 + null 이다`() {
         Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(
             fullView().copy(
                 status = "COMPLETED",
-                result = ChallengeResult.OPPONENT_WIN,
-                // challenger(1) 가 기권했다 — 그래서 result 가 OPPONENT_WIN 이다.
-                forfeitedBy = 1L,
+                myResult = Outcome.WIN,
+                // 상대가 기권했다 — 그래서 내가 이겼다.
+                forfeitedBy = RelativeParty.OPPONENT,
             ),
         )
 
         mockMvc.perform(get("/api/v1/challenges/7"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data.result").value("OPPONENT_WIN"))
-            .andExpect(jsonPath("$.data.forfeitedBy").value(1))
-            .andExpect(jsonPath("$.data.challenger.userId").value(1))
+            .andExpect(jsonPath("$.data.myResult").value("WIN"))
+            .andExpect(jsonPath("$.data.forfeitedBy").value("OPPONENT"))
 
         // 기권 없이 진행 중 — 키는 남고 값만 null 이다 (#24 와 같은 축).
         Mockito.`when`(challengeDetailService.getDetail(anyLong(), anyLong())).thenReturn(fullView())
@@ -313,13 +306,13 @@ class ChallengeDetailControllerTest {
     private fun fullView() = ChallengeDetailView(
         challengeId = 7L,
         status = "IN_PROGRESS",
-        // IN_PROGRESS 라 null 이다 — 판정된 케이스는 `completedView()` 가 따로 만든다.
-        result = null,
+        // IN_PROGRESS 라 null 이다.
+        myResult = null,
         forfeitedBy = null,
         challengeDate = "2026-08-03",
         deadline = LocalDateTime.of(2026, 8, 4, 0, 0, 0),
         betContent = "커피 사기",
-        challenger = PartyView(
+        me = PartyView(
             userId = 1L,
             nickname = "이우건",
             profileImageUrl = "https://example.com/a.png",
@@ -334,8 +327,8 @@ class ChallengeDetailControllerTest {
         contract = ContractView(
             content = "영혼의 맹세\n\n...",
             isFinalized = true,
-            challengerSignature = """{"v":1,"g":1000,"s":[[123,456,130,460]]}""",
-            challengerSignedAt = LocalDateTime.of(2026, 8, 3, 11, 20, 0),
+            mySignature = """{"v":1,"g":1000,"s":[[123,456,130,460]]}""",
+            mySignedAt = LocalDateTime.of(2026, 8, 3, 11, 20, 0),
             opponentSignature = """{"v":1,"g":1000,"s":[[700,200,705,210]]}""",
             opponentSignedAt = LocalDateTime.of(2026, 8, 3, 11, 25, 0),
         ),

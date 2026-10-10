@@ -26,6 +26,7 @@ import com.lwg.challenge.controller.challenge.dto.ChallengeVerificationsResponse
 import com.lwg.challenge.controller.challenge.dto.ContractDto
 import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeData
 import com.lwg.challenge.controller.challenge.dto.ForfeitChallengeResponse
+import com.lwg.challenge.controller.challenge.dto.MyPartyDto
 import com.lwg.challenge.controller.challenge.dto.PartyDto
 import com.lwg.challenge.controller.challenge.dto.PartyVerificationDto
 import com.lwg.challenge.controller.challenge.dto.SubmitVerificationData
@@ -638,17 +639,18 @@ class WireShapeContractTest {
         val data = dataOf(ChallengeDetailResponse(detailData()))
         assertKeys(
             setOf(
-                "challengeId", "status", "result", "forfeitedBy", "challengeDate", "deadline",
-                "betContent", "challenger", "opponent", "contract",
+                "challengeId", "status", "myResult", "forfeitedBy", "challengeDate", "deadline",
+                "betContent", "me", "opponent", "contract",
             ),
             data,
             "ChallengeDetailData",
         )
-        assertKeys(setOf("userId", "nickname", "profileImageUrl", "mission"), data.path("challenger"), "PartyDto")
+        assertKeys(setOf("nickname", "profileImageUrl", "mission"), data.path("me"), "MyPartyDto")
+        assertKeys(setOf("userId", "nickname", "profileImageUrl", "mission"), data.path("opponent"), "PartyDto")
         assertKeys(
             setOf(
                 "content", "isFinalized",
-                "challengerSignature", "challengerSignedAt",
+                "mySignature", "mySignedAt",
                 "opponentSignature", "opponentSignedAt",
             ),
             data.path("contract"),
@@ -668,23 +670,23 @@ class WireShapeContractTest {
             ChallengeDetailResponse(
                 detailData().copy(
                     contract = null,
-                    challenger = detailData().challenger.copy(profileImageUrl = null, mission = null),
+                    me = detailData().me.copy(profileImageUrl = null, mission = null),
                 ),
             ),
         )
         assertKeys(
             setOf(
-                "challengeId", "status", "result", "forfeitedBy", "challengeDate", "deadline",
-                "betContent", "challenger", "opponent", "contract",
+                "challengeId", "status", "myResult", "forfeitedBy", "challengeDate", "deadline",
+                "betContent", "me", "opponent", "contract",
             ),
             data,
             "ChallengeDetailData (null 최대)",
         )
         assertTrue(data.path("contract").isNull, "contract 키가 있고 값이 null 이어야 한다")
-        assertTrue(data.path("challenger").path("mission").isNull, "mission 키가 있고 값이 null 이어야 한다")
-        // [detailData] 는 IN_PROGRESS 라 result 가 null 이다 — 상세에서도 **대부분의 응답이
+        assertTrue(data.path("me").path("mission").isNull, "mission 키가 있고 값이 null 이어야 한다")
+        // [detailData] 는 IN_PROGRESS 라 myResult 가 null 이다 — 상세에서도 **대부분의 응답이
         // null 인 필드**이므로 여기서 키 존재를 못박는다 (계약 §1: status != COMPLETED ⇒ 항상 null).
-        assertTrue(data.path("result").isNull, "result 키가 있고 값이 null 이어야 한다")
+        assertTrue(data.path("myResult").isNull, "myResult 키가 있고 값이 null 이어야 한다")
         // 기권 없는 챌린지가 압도적 다수라 이 키도 거의 항상 null 이다 (challenge-forfeit).
         // 키가 사라지면 앱은 "기권 없음" 과 "필드 자체가 없음" 을 구별하지 못한다.
         assertTrue(data.path("forfeitedBy").isNull, "forfeitedBy 키가 있고 값이 null 이어야 한다")
@@ -736,13 +738,13 @@ class WireShapeContractTest {
     @Test
     fun `ChallengeVerificationsResponse - 양측 인증 현황`() {
         val data = dataOf(ChallengeVerificationsResponse(verificationsData()))
-        assertKeys(setOf("challengeId", "challenger", "opponent"), data, "ChallengeVerificationsData")
+        assertKeys(setOf("challengeId", "me", "opponent"), data, "ChallengeVerificationsData")
         assertKeys(
-            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted", "aiReason"),
-            data.path("challenger"),
+            setOf("status", "photoUrl", "verifiedAt", "photoDeleted", "aiReason"),
+            data.path("me"),
             "PartyVerificationDto",
         )
-        assertEquals("2026-08-14 15:32:10", data.path("challenger").path("verifiedAt").asText())
+        assertEquals("2026-08-14 15:32:10", data.path("me").path("verifiedAt").asText())
     }
 
     /**
@@ -758,8 +760,8 @@ class WireShapeContractTest {
         val response = ChallengeVerificationsResponse(verificationsData())
         val data = dataOf(response)
 
-        assertTrue(data.path("challenger").path("photoDeleted").isBoolean, "photoDeleted 는 Boolean 이어야 한다")
-        assertEquals(false, data.path("challenger").path("photoDeleted").asBoolean())
+        assertTrue(data.path("me").path("photoDeleted").isBoolean, "photoDeleted 는 Boolean 이어야 한다")
+        assertEquals(false, data.path("me").path("photoDeleted").asBoolean())
         assertEquals(false, data.path("opponent").path("photoDeleted").asBoolean())
         assertTrue(
             mapper.writeValueAsString(response).contains(""""photoDeleted":false"""),
@@ -772,14 +774,14 @@ class WireShapeContractTest {
     fun `PartyVerificationDto - 탈퇴로 지워진 사진은 photoUrl null 에 photoDeleted true 다`() {
         val response = ChallengeVerificationsResponse(
             verificationsData().copy(
-                challenger = verificationsData().challenger.copy(photoUrl = null, photoDeleted = true),
+                me = verificationsData().me.copy(photoUrl = null, photoDeleted = true),
             ),
         )
-        val challenger = dataOf(response).path("challenger")
+        val me = dataOf(response).path("me")
 
-        assertEquals("VERIFIED", challenger.path("status").asText(), "탈퇴는 row 를 보존한다 — status 는 그대로다")
-        assertTrue(challenger.path("photoUrl").isNull, "key 가 지워졌으므로 경로도 null 이다")
-        assertEquals(true, challenger.path("photoDeleted").asBoolean())
+        assertEquals("VERIFIED", me.path("status").asText(), "탈퇴는 row 를 보존한다 — status 는 그대로다")
+        assertTrue(me.path("photoUrl").isNull, "key 가 지워졌으므로 경로도 null 이다")
+        assertEquals(true, me.path("photoDeleted").asBoolean())
     }
 
     /**
@@ -795,7 +797,7 @@ class WireShapeContractTest {
         val opponent = dataOf(response).path("opponent")
 
         assertKeys(
-            setOf("userId", "status", "photoUrl", "verifiedAt", "photoDeleted", "aiReason"),
+            setOf("status", "photoUrl", "verifiedAt", "photoDeleted", "aiReason"),
             opponent,
             "PartyVerificationDto (PENDING)",
         )
@@ -823,29 +825,28 @@ class WireShapeContractTest {
     fun `PartyVerificationDto - AI 반려는 FAILED 에 사유와 사진 경로가 함께 나간다`() {
         val response = ChallengeVerificationsResponse(
             verificationsData().copy(
-                challenger = verificationsData().challenger.copy(
+                me = verificationsData().me.copy(
                     status = VerificationStatus.FAILED,
                     aiReason = "책상 위 커피잔 사진으로, 미션(주 3회 운동) 수행 증거로 보기 어려워요.",
                 ),
             ),
         )
-        val challenger = dataOf(response).path("challenger")
+        val me = dataOf(response).path("me")
 
-        assertEquals("FAILED", challenger.path("status").asText())
-        assertTrue(challenger.path("aiReason").isTextual, "반려 사유가 문자열로 나가야 한다")
+        assertEquals("FAILED", me.path("status").asText())
+        assertTrue(me.path("aiReason").isTextual, "반려 사유가 문자열로 나가야 한다")
         assertTrue(
-            !challenger.path("photoUrl").isNull,
+            !me.path("photoUrl").isNull,
             "반려돼도 사진 경로는 남는다 — 판정의 근거를 숨기면 사용자가 무엇이 반려됐는지 못 본다",
         )
-        assertEquals(false, challenger.path("photoDeleted").asBoolean(), "반려는 삭제가 아니다")
+        assertEquals(false, me.path("photoDeleted").asBoolean(), "반려는 삭제가 아니다")
     }
 
     // ─── fixtures ────────────────────────────────────────────────
 
     private fun verificationsData() = ChallengeVerificationsData(
         challengeId = 7L,
-        challenger = PartyVerificationDto(
-            userId = 1L,
+        me = PartyVerificationDto(
             status = VerificationStatus.VERIFIED,
             photoUrl = "/api/v1/challenges/7/photos/challenger",
             verifiedAt = LocalDateTime.of(2026, 8, 14, 15, 32, 10),
@@ -855,7 +856,6 @@ class WireShapeContractTest {
             aiReason = null,
         ),
         opponent = PartyVerificationDto(
-            userId = 14L,
             status = VerificationStatus.PENDING,
             photoUrl = null,
             verifiedAt = null,
@@ -867,20 +867,20 @@ class WireShapeContractTest {
     private fun detailData() = ChallengeDetailData(
         challengeId = 7L,
         status = ChallengeStatus.IN_PROGRESS,
-        // IN_PROGRESS 이므로 null 이다 — `status == COMPLETED ⟺ result != null` (계약 §1).
-        result = null,
+        // IN_PROGRESS 이므로 null 이다 — `status == COMPLETED ⟺ myResult != null` (계약 §1).
+        myResult = null,
         // 기권 없이 진행 중이다 — null 이어도 키는 나간다 (challenge-forfeit).
         forfeitedBy = null,
         challengeDate = "2026-08-03",
         deadline = LocalDateTime.of(2026, 8, 4, 0, 0),
         betContent = "커피 사기",
-        challenger = PartyDto(1L, "이우건", null, "운동"),
+        me = MyPartyDto("이우건", null, "운동"),
         opponent = PartyDto(14L, "테스터1", null, "독서"),
         contract = ContractDto(
             content = "본문",
             isFinalized = true,
-            challengerSignature = """{"v":1,"g":1000,"s":[[1,2]]}""",
-            challengerSignedAt = LocalDateTime.of(2026, 8, 3, 11, 20),
+            mySignature = """{"v":1,"g":1000,"s":[[1,2]]}""",
+            mySignedAt = LocalDateTime.of(2026, 8, 3, 11, 20),
             opponentSignature = """{"v":1,"g":1000,"s":[[3,4]]}""",
             opponentSignedAt = LocalDateTime.of(2026, 8, 3, 11, 25),
         ),

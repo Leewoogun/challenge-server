@@ -93,7 +93,7 @@ class VerificationController(
     @GetMapping("/challenges/{id}/verifications")
     @Operation(
         summary = "양측 인증 현황 + 사진 경로",
-        description = "당사자만 조회 가능 (ADR-0011 §4). challenger/opponent 를 역할 그대로 반환한다. " +
+        description = "당사자만 조회 가능 (ADR-0011 §4). 요청자 기준 me/opponent 로 반환한다. " +
             "photoUrl 은 만료 없는 상대 경로이며, 열 때 Authorization 이 필요하다.",
     )
     @SecurityRequirement(name = "bearerAuth")
@@ -104,7 +104,7 @@ class VerificationController(
         return ChallengeVerificationsResponse(
             data = ChallengeVerificationsData(
                 challengeId = view.challengeId,
-                challenger = view.challenger.toDto(),
+                me = view.me.toDto(),
                 opponent = view.opponent.toDto(),
             ),
         )
@@ -206,7 +206,6 @@ class VerificationController(
     // ─── helpers ─────────────────────────────────────────────────
 
     private fun PartyVerificationView.toDto() = PartyVerificationDto(
-        userId = userId,
         status = status,
         photoUrl = photoUrl,
         verifiedAt = verifiedAt,
