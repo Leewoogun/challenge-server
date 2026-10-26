@@ -42,8 +42,12 @@ import java.util.concurrent.TimeUnit
  * POST https://generativelanguage.googleapis.com/v1/interactions
  * x-goog-api-key: <key>
  * Api-Revision: 2026-05-20
- * { "model": ..., "input": [{type:text}, {type:image}], "generation_config": {...}, "response_format": {...} }
+ * { "model": ..., "input": [{type:user_input, content:[{type:text}, {type:image}]}],
+ *   "generation_config": {...}, "response_format": {...} }
  * ```
+ *
+ * 🔴 **`input` 은 `user_input` step 으로 감싼다** — `v1` 은 content block 을 바로 받지 않는다
+ * ([buildRequestBody] 주석).
  *
  * 🔴 **`generateContent` + `generationConfig.responseMimeType` 이 아니다.** 2026-05 breaking
  * change 로 `response_mime_type` 이 사라지고 `response_format` 으로 옮겨졌다. spec §5.3 과
@@ -140,6 +144,11 @@ class GeminiMissionVerifier(
          * actively being developed"* 이고 **2026-05 에 `response_mime_type` → `response_format`
          * breaking change 가 일어난 바로 그 채널**이다. 개인 프로젝트에 상시로 깨질 채널을
          * 물리지 않는다. 🔵 SDK 기본값이 `v1beta` 라는 것도 그 예제들이 그렇게 보이는 이유다.
+         *
+         * 🔴 **`v1` 의 대가: 예제의 요청 모양을 그대로 쓰면 안 된다.** 예제가 쓰는 `input` 축약형
+         * (content block 직접 나열)은 `v1beta` 전용이라 `v1` 에서 400 이다 — 2026-09 구현부터
+         * 2026-10-26 까지 **모든 판별이 이 400 으로 fail-open** 됐다. 그 문서 문장은 "기능이 GA" 이지
+         * "예제가 v1 에서 돈다" 가 아니었다.
          */
         const val INTERACTIONS_PATH = "/v1/interactions"
 
@@ -254,12 +263,19 @@ internal fun buildRequestBody(
     val root: ObjectNode = objectMapper.createObjectNode()
     root.put("model", model)
 
-    val input = root.putArray("input")
-    input.addObject().apply {
+    // 🔴 **`v1` 은 content block 을 `input` 에 바로 받지 않는다 — `user_input` step 으로 감싼다.**
+    //    `[{type:text}, {type:image}]` 를 바로 넣는 것은 `v1beta` 전용 축약형이고, `v1` 은
+    //    400 *"The value 'text' is not supported for 'input[0].type' in v1"* 을 낸다
+    //    (2026-10-26 실호출 확인). 문서 예제가 축약형을 쓰는 것은 예제가 `v1beta` 이기 때문이다.
+    //    ⚠️ 그 400 은 fail-open 을 타서 **판별이 전건 조용히 통과**됐었다 — 이 감싸기를 벗기지 마라.
+    val userInput = root.putArray("input").addObject()
+    userInput.put("type", "user_input")
+    val content = userInput.putArray("content")
+    content.addObject().apply {
         put("type", "text")
         put("text", buildInstruction(missionText))
     }
-    input.addObject().apply {
+    content.addObject().apply {
         put("type", "image")
         put("mime_type", "image/jpeg")
         put("data", Base64.getEncoder().encodeToString(photoBytes))
