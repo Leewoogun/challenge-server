@@ -35,7 +35,7 @@ import java.time.LocalDateTime
  *
  * - `@WebMvcTest` 로 컨트롤러 + GlobalExceptionHandler 만 로드 (DB 불필요).
  * - `addFilters=false` 로 SecurityFilterChain 우회. SecurityContext 에 직접 principal=Long 주입.
- * - 페이지 판정 규칙(`size + 1`, `nextCursor`)은 `NotificationQueryServiceTest`, 읽음 처리의
+ * - 페이지 판정 규칙(`size + 1`, `nextNotificationId`, `isPageEnd` 산출)은 `NotificationQueryServiceTest`, 읽음 처리의
  *   *"0 은 실측이다"* 규칙은 `NotificationCommandServiceTest`, SQL 은 실구동이 본다.
  *   여기서 보는 것은 **wire 로 나가는 모양**과 **쿼리 파라미터 파싱**이다.
  *
@@ -47,7 +47,7 @@ import java.time.LocalDateTime
  *    *"목록을 열면 전부 읽음"* 이라 행별 값의 정보량이 0이기 때문이고, `title` 은 카드가
  *    `body` 단독 1행이라 화면이 그리지 않기 때문이다. ⚠️ 둘 다 **DB 컬럼은 그대로 있다** —
  *    없는 것은 wire 뿐이다.
- * 3. 🔴 **null 이어도 키는 남는다** (`nextCursor` / `referenceId` / `referencePending`) — 이 프로젝트
+ * 3. 🔴 **null 이어도 키는 남는다** (`nextNotificationId` / `referenceId` / `referencePending`) — 이 프로젝트
  *    Jackson 에 `@JsonInclude(NON_NULL)` 이 없다는 사실에 모바일이 기대고 있다. `referencePending` 은
  *    특히 그렇다 — `null` 이 **«이 필드를 보지 마라»** 라는 세 번째 상태라, 키가 사라지면 앱이 그
  *    상태를 표현할 방법 자체를 잃는다.
@@ -117,7 +117,7 @@ class NotificationControllerTest {
                         createdAt = LocalDateTime.of(2026, 8, 31, 9, 5, 0),
                     ),
                 ),
-                nextCursor = 38L,
+                nextNotificationId = 38L,
             ),
         )
 
@@ -134,7 +134,7 @@ class NotificationControllerTest {
             .andExpect(jsonPath("$.data.notifications[1].notificationId").value(40))
             .andExpect(jsonPath("$.data.notifications[1].type").value("CHALLENGE_REJECTED"))
             .andExpect(jsonPath("$.data.notifications[1].createdAt").value("2026-08-31 09:05:00"))
-            .andExpect(jsonPath("$.data.nextCursor").value(38))
+            .andExpect(jsonPath("$.data.nextNotificationId").value(38))
     }
 
     /**
@@ -145,7 +145,7 @@ class NotificationControllerTest {
      */
     @Test
     fun `getNotifications - createdAt 이 T 나 Z 없이 KST 표기로 나간다`() {
-        stubDefault(NotificationPage(notifications = listOf(view()), nextCursor = null))
+        stubDefault(NotificationPage(notifications = listOf(view()), nextNotificationId = null))
 
         val body = mockMvc.perform(get("/api/v1/notifications"))
             .andExpect(status().isOk)
@@ -161,7 +161,7 @@ class NotificationControllerTest {
     }
 
     /**
-     * 🔴 **`nextCursor` 가 null 이어도 키는 실려 나간다** — `doesNotExist()` 가 아니다.
+     * 🔴 **`nextNotificationId` 가 null 이어도 키는 실려 나간다** — `doesNotExist()` 가 아니다.
      *
      * 키 부재와 값 null 은 모바일에서 서로 다른 예외라(`MissingFieldException` vs
      * `JsonConvertException`) 앱이 *"키는 항상 있고 null 이면 끝"* 을 전제한다. 누가
@@ -169,18 +169,75 @@ class NotificationControllerTest {
      * 조용히 바뀐다 — 첫 페이지 테스트로는 절대 안 잡힌다.
      */
     @Test
-    fun `getNotifications - nextCursor 가 null 이어도 키가 존재한다`() {
-        stubDefault(NotificationPage(notifications = listOf(view()), nextCursor = null))
+    fun `getNotifications - nextNotificationId 가 null 이어도 키가 존재한다`() {
+        stubDefault(NotificationPage(notifications = listOf(view()), nextNotificationId = null))
 
         val body = mockMvc.perform(get("/api/v1/notifications"))
             .andExpect(status().isOk)
-            .andExpect(jsonPath("$.data.nextCursor").value(nullValue()))
+            .andExpect(jsonPath("$.data.nextNotificationId").value(nullValue()))
             .andReturn().response.getContentAsString(Charsets.UTF_8)
 
         assertTrue(
-            body.contains(""""nextCursor":null"""),
+            body.contains(""""nextNotificationId":null"""),
             "null 이어도 키가 사라지면 안 된다 (앱이 키 존재를 전제한다): $body",
         )
+    }
+
+    // ─── 🔴 끝 신호 불변식 — isPageEnd == (nextNotificationId == null) (ADR-0014 §2) ──
+
+    /**
+     * 🔴 **중간 페이지 — `isPageEnd: false` + `nextNotificationId` 값.**
+     *
+     * 끝 신호가 둘이라(ADR-0014) 둘 중 하나만 옮겨도, 하나를 상수로 박아도 응답 shape 은 멀쩡하다.
+     * 그래서 끝/중간/0건 **세 경우를 다** wire 원문으로 본다 — 한 경우만 보면 상수 하나가 통과한다.
+     */
+    @Test
+    fun `getNotifications - 중간 페이지는 isPageEnd false 이고 nextNotificationId 가 실린다`() {
+        // 이번 페이지 마지막이 38 이고, 다음 페이지 첫 항목(초과분)이 37 이다 (ADR-0014 §3).
+        stubDefault(NotificationPage(notifications = listOf(view(notificationId = 38L)), nextNotificationId = 37L))
+
+        val body = mockMvc.perform(get("/api/v1/notifications"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.nextNotificationId").value(37))
+            .andExpect(jsonPath("$.data.isPageEnd").value(false))
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(body.contains(""""isPageEnd":false"""), "키 이름이 isPageEnd 로 나가야 한다: $body")
+    }
+
+    /** 🔴 **끝 페이지 — `isPageEnd: true` + `nextNotificationId: null`.** 둘 다 키가 실린다. */
+    @Test
+    fun `getNotifications - 끝 페이지는 isPageEnd true 이고 nextNotificationId 가 null 이다`() {
+        stubDefault(NotificationPage(notifications = listOf(view()), nextNotificationId = null))
+
+        val body = mockMvc.perform(get("/api/v1/notifications"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.nextNotificationId").value(nullValue()))
+            .andExpect(jsonPath("$.data.isPageEnd").value(true))
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(body.contains(""""isPageEnd":true"""), "키 이름이 isPageEnd 로 나가야 한다: $body")
+        assertTrue(body.contains(""""nextNotificationId":null"""), "null 이어도 키가 실려야 한다: $body")
+    }
+
+    /**
+     * 🔴 **v2 키(`nextCursor`)는 응답에 없다** — ADR-0014 breaking change.
+     *
+     * 남아 있으면 앱이 옛 키를 계속 읽어도 동작해 **이전이 끝났는지 아무도 모른다.** 두 이름이
+     * 공존하면 끝 신호가 셋이 된다.
+     */
+    @Test
+    fun `getNotifications - 폐기된 nextCursor 키는 응답에 없다`() {
+        stubDefault(NotificationPage(notifications = listOf(view()), nextNotificationId = 38L))
+
+        val body = mockMvc.perform(get("/api/v1/notifications"))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.data.nextCursor").doesNotExist())
+            .andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        assertTrue(!body.contains("nextCursor"), "폐기된 키가 남아 있다: $body")
+        // Kotlin `isXxx` 프로퍼티는 Jackson 이 `is` 접두를 떼어 `pageEnd` 로 낼 수 있는 자리다.
+        assertTrue(!body.contains(""""pageEnd":"""), "is 접두가 떨어진 키가 나갔다: $body")
     }
 
     /**
@@ -209,7 +266,7 @@ class NotificationControllerTest {
                         referencePending = false,
                     ),
                 ),
-                nextCursor = null,
+                nextNotificationId = null,
             ),
         )
 
@@ -226,7 +283,7 @@ class NotificationControllerTest {
     /**
      * 🔴 **`referencePending` 이 null 이어도 키는 실려 나간다** — `doesNotExist()` 가 아니다.
      *
-     * `nextCursor` / `referenceId` 와 같은 사정이다 (이 프로젝트 Jackson 에 `@JsonInclude(NON_NULL)`
+     * `nextNotificationId` / `referenceId` 와 같은 사정이다 (이 프로젝트 Jackson 에 `@JsonInclude(NON_NULL)`
      * 이 없다). 여기서는 이유가 하나 더 있다 — `null` 은 «비탭» 이 아니라 **«이 필드를 보지 마라»**
      * 라서, 키가 통째로 사라지면 앱이 그 세 번째 상태를 표현할 방법을 잃는다. 그러면 남는 선택지는
      * *"없으면 비탭"* 또는 *"없으면 탭 가능"* 뿐이고 **둘 다 틀린다** (`NotificationDto` KDoc).
@@ -236,7 +293,7 @@ class NotificationControllerTest {
         stubDefault(
             NotificationPage(
                 notifications = listOf(view(type = "OPPONENT_VERIFIED", referencePending = null)),
-                nextCursor = null,
+                nextNotificationId = null,
             ),
         )
 
@@ -255,7 +312,7 @@ class NotificationControllerTest {
     /** 🔴 `referenceId` 도 같다 — null 이어도 키가 남는다. */
     @Test
     fun `getNotifications - referenceId 가 null 이어도 키가 존재한다`() {
-        stubDefault(NotificationPage(notifications = listOf(view(referenceId = null)), nextCursor = null))
+        stubDefault(NotificationPage(notifications = listOf(view(referenceId = null)), nextNotificationId = null))
 
         val body = mockMvc.perform(get("/api/v1/notifications"))
             .andExpect(status().isOk)
@@ -278,7 +335,7 @@ class NotificationControllerTest {
      */
     @Test
     fun `getNotifications - isRead 는 응답에 없다`() {
-        stubDefault(NotificationPage(notifications = listOf(view()), nextCursor = null))
+        stubDefault(NotificationPage(notifications = listOf(view()), nextNotificationId = null))
 
         val body = mockMvc.perform(get("/api/v1/notifications"))
             .andExpect(status().isOk)
@@ -306,7 +363,7 @@ class NotificationControllerTest {
      */
     @Test
     fun `getNotifications - title 은 응답에 없다 - 카드는 body 단독 1행이다`() {
-        stubDefault(NotificationPage(notifications = listOf(view()), nextCursor = null))
+        stubDefault(NotificationPage(notifications = listOf(view()), nextNotificationId = null))
 
         val body = mockMvc.perform(get("/api/v1/notifications"))
             .andExpect(status().isOk)
@@ -333,7 +390,7 @@ class NotificationControllerTest {
         stubDefault(
             NotificationPage(
                 notifications = listOf(view(notificationId = 99L, type = "SOME_FUTURE_TYPE")),
-                nextCursor = null,
+                nextNotificationId = null,
             ),
         )
 
@@ -353,22 +410,24 @@ class NotificationControllerTest {
     /** 알림이 0건이면 빈 배열이다 — 에러가 아니다. */
     @Test
     fun `getNotifications - 알림이 없으면 빈 배열로 정상 응답한다`() {
-        stubDefault(NotificationPage(notifications = emptyList(), nextCursor = null))
+        stubDefault(NotificationPage(notifications = emptyList(), nextNotificationId = null))
 
         mockMvc.perform(get("/api/v1/notifications"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(false))
             .andExpect(jsonPath("$.data.notifications").isArray)
             .andExpect(jsonPath("$.data.notifications.length()").value(0))
-            .andExpect(jsonPath("$.data.nextCursor").value(nullValue()))
+            .andExpect(jsonPath("$.data.nextNotificationId").value(nullValue()))
+            // 🔴 0건도 끝이다 — 불변식의 세 번째 경우 (ADR-0014 §2).
+            .andExpect(jsonPath("$.data.isPageEnd").value(true))
     }
 
     // ─── 파라미터 파싱 ───────────────────────────────────────────
 
-    /** 파라미터 없이 부르면 `cursor=null` + `size=20`(기본값)이 서비스로 간다. */
+    /** 파라미터 없이 부르면 `nextNotificationId=null` + `size=20`(기본값)이 서비스로 간다. */
     @Test
-    fun `getNotifications - 파라미터가 없으면 cursor null 과 기본 size 로 호출된다`() {
-        stubDefault(NotificationPage(notifications = emptyList(), nextCursor = null))
+    fun `getNotifications - 파라미터가 없으면 nextNotificationId null 과 기본 size 로 호출된다`() {
+        stubDefault(NotificationPage(notifications = emptyList(), nextNotificationId = null))
 
         mockMvc.perform(get("/api/v1/notifications")).andExpect(status().isOk)
 
@@ -376,11 +435,11 @@ class NotificationControllerTest {
     }
 
     @Test
-    fun `getNotifications - cursor 와 size 가 파싱돼 서비스에 전달된다`() {
+    fun `getNotifications - nextNotificationId 와 size 가 파싱돼 서비스에 전달된다`() {
         Mockito.`when`(notificationQueryService.getNotifications(meId, 38L, 5))
-            .thenReturn(NotificationPage(notifications = listOf(view()), nextCursor = null))
+            .thenReturn(NotificationPage(notifications = listOf(view()), nextNotificationId = null))
 
-        mockMvc.perform(get("/api/v1/notifications").param("cursor", "38").param("size", "5"))
+        mockMvc.perform(get("/api/v1/notifications").param("nextNotificationId", "38").param("size", "5"))
             .andExpect(status().isOk)
 
         Mockito.verify(notificationQueryService).getNotifications(meId, 38L, 5)
@@ -389,19 +448,19 @@ class NotificationControllerTest {
     /** 빈 문자열(`?size=`)은 미지정과 같다 — 앱이 빈 값을 붙여 보내도 첫 진입이 깨지지 않는다. */
     @Test
     fun `getNotifications - size 가 빈 문자열이면 기본값 20 이다`() {
-        stubDefault(NotificationPage(notifications = emptyList(), nextCursor = null))
+        stubDefault(NotificationPage(notifications = emptyList(), nextNotificationId = null))
 
         mockMvc.perform(get("/api/v1/notifications").param("size", "")).andExpect(status().isOk)
 
         Mockito.verify(notificationQueryService).getNotifications(meId, null, DEFAULT_SIZE)
     }
 
-    /** `?cursor=` 도 마찬가지 — 커서 없는 첫 페이지다. */
+    /** `?nextNotificationId=` 도 마찬가지 — 첫 페이지다. */
     @Test
-    fun `getNotifications - cursor 가 빈 문자열이면 첫 페이지다`() {
-        stubDefault(NotificationPage(notifications = emptyList(), nextCursor = null))
+    fun `getNotifications - nextNotificationId 가 빈 문자열이면 첫 페이지다`() {
+        stubDefault(NotificationPage(notifications = emptyList(), nextNotificationId = null))
 
-        mockMvc.perform(get("/api/v1/notifications").param("cursor", "")).andExpect(status().isOk)
+        mockMvc.perform(get("/api/v1/notifications").param("nextNotificationId", "")).andExpect(status().isOk)
 
         Mockito.verify(notificationQueryService).getNotifications(meId, null, DEFAULT_SIZE)
     }
@@ -430,7 +489,7 @@ class NotificationControllerTest {
     /**
      * 🔴 **범위 밖은 clamp 가 아니라 거부다.**
      *
-     * `size=51` 을 조용히 50 으로 깎으면 앱은 51건을 받았다고 믿고, 자체 계산한 커서로 다음
+     * `size=51` 을 조용히 50 으로 깎으면 앱은 51건을 받았다고 믿고, 자체 계산한 기준 id 로 다음
      * 페이지를 이어 붙이는 순간 **1건이 예외도 로그도 없이 사라진다.** 보관함이 미래 달을
      * clamp 하지 않는 것과 같은 판단이다.
      */
@@ -456,7 +515,7 @@ class NotificationControllerTest {
     /** 경계 자체는 통과한다 — 한 칸 틀리면 정상 요청이 막힌다. */
     @Test
     fun `getNotifications - size 1 과 50 은 허용된다`() {
-        val page = NotificationPage(notifications = emptyList(), nextCursor = null)
+        val page = NotificationPage(notifications = emptyList(), nextNotificationId = null)
         Mockito.`when`(notificationQueryService.getNotifications(meId, null, 1)).thenReturn(page)
         Mockito.`when`(notificationQueryService.getNotifications(meId, null, 50)).thenReturn(page)
 
@@ -468,8 +527,8 @@ class NotificationControllerTest {
     }
 
     @Test
-    fun `getNotifications - cursor 가 숫자가 아니면 HTTP 200 + code 700`() {
-        mockMvc.perform(get("/api/v1/notifications").param("cursor", "abc"))
+    fun `getNotifications - nextNotificationId 가 숫자가 아니면 HTTP 200 + code 700`() {
+        mockMvc.perform(get("/api/v1/notifications").param("nextNotificationId", "abc"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.error").value(true))
             .andExpect(jsonPath("$.code").value(ResponseCode.SNACKBAR_ERROR))
@@ -498,7 +557,7 @@ class NotificationControllerTest {
      */
     @Test
     fun `getNotifications - service 에 SecurityContext principal 이 그대로 전달된다`() {
-        stubDefault(NotificationPage(notifications = emptyList(), nextCursor = null))
+        stubDefault(NotificationPage(notifications = emptyList(), nextNotificationId = null))
 
         mockMvc.perform(get("/api/v1/notifications")).andExpect(status().isOk)
 
@@ -627,13 +686,13 @@ class NotificationControllerTest {
         val countBody = mockMvc.perform(get("/api/v1/notifications/unread-count"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.notifications").doesNotExist())
-            .andExpect(jsonPath("$.data.nextCursor").doesNotExist())
+            .andExpect(jsonPath("$.data.nextNotificationId").doesNotExist())
             .andReturn().response.getContentAsString(Charsets.UTF_8)
 
         val readAllBody = mockMvc.perform(post("/api/v1/notifications/read-all"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.data.notifications").doesNotExist())
-            .andExpect(jsonPath("$.data.nextCursor").doesNotExist())
+            .andExpect(jsonPath("$.data.nextNotificationId").doesNotExist())
             .andReturn().response.getContentAsString(Charsets.UTF_8)
 
         assertTrue(!countBody.contains("notifications"), "목록 DTO 가 섞였다: $countBody")
@@ -645,7 +704,7 @@ class NotificationControllerTest {
     /** 반대 방향 — 목록 응답에는 `unreadCount` 가 없다. 뱃지 축은 목록이 아니다. */
     @Test
     fun `목록 응답에는 unreadCount 가 없다`() {
-        stubDefault(NotificationPage(notifications = listOf(view()), nextCursor = null))
+        stubDefault(NotificationPage(notifications = listOf(view()), nextNotificationId = null))
 
         val body = mockMvc.perform(get("/api/v1/notifications"))
             .andExpect(status().isOk)

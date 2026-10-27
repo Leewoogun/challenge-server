@@ -54,15 +54,15 @@ import org.springframework.web.bind.annotation.RestController
  *
  * ## 🔴 쿼리 파라미터를 `Long?`/`Int?` 로 선언하지 않았다 — `String?` 로 받아 직접 파싱한다
  *
- * 타입 바인딩(`cursor: Long?`)에 실패하면 Spring 이 `MethodArgumentTypeMismatchException` 을
+ * 타입 바인딩(`nextNotificationId: Long?`)에 실패하면 Spring 이 `MethodArgumentTypeMismatchException` 을
  * 던지는데, `GlobalExceptionHandler` 에 **그 타입의 핸들러가 없어서** `handleUncaught` 로 떨어져
- * **HTTP 500 + code=500** 이 나간다. 클라이언트가 `?cursor=abc` 를 한 번 잘못 보낸 것이 **서버
+ * **HTTP 500 + code=500** 이 나간다. 클라이언트가 `?nextNotificationId=abc` 를 한 번 잘못 보낸 것이 **서버
  * 장애로 보고되는 것**이다 (ADR-0002: 5xx 는 인프라 장애 전용).
  *
  * 전역 핸들러를 새로 추가하는 선택지는 **다른 모든 엔드포인트의 타입 불일치 응답까지 바꾸므로**
  * 이 범위가 아니다. [ChallengeHistoryController.parseMonth][com.lwg.challenge.controller.challenge.ChallengeHistoryController]
  * 가 `?month=` 에서 정확히 같은 판단을 내린 **선례**이고, 여기도 같은 형태를 따른다 —
- * 문자열로 받아 [parseCursor] / [parseSize] 에서 파싱하고 [SnackbarException] (HTTP 200 + code=700)
+ * 문자열로 받아 [parseNextNotificationId] / [parseSize] 에서 파싱하고 [SnackbarException] (HTTP 200 + code=700)
  * 으로 던진다.
  */
 @RestController
@@ -76,9 +76,12 @@ class NotificationController(
     @GetMapping("/notifications")
     @Operation(
         summary = "알림 목록 조회",
-        description = "현재 사용자의 알림을 **최신순(id 내림차순)** 커서 페이지네이션으로 반환한다. " +
-            "`cursor` 를 생략하면 첫 페이지이고, 응답의 `nextCursor` 를 다음 요청에 그대로 실으면 된다. " +
-            "**`nextCursor` 가 null 이면 목록의 끝**이다 (null 이어도 키는 실려 나간다). " +
+        description = "현재 사용자의 알림을 **최신순(id 내림차순)** 커서 페이지네이션으로 반환한다 (ADR-0012/0014). " +
+            "`nextNotificationId` 를 생략하면 첫 페이지이고, 응답의 `nextNotificationId` 를 다음 요청에 " +
+            "**그대로** 실으면 된다. 값은 **다음 페이지 첫 항목의 id** 이고 다음 요청은 그 id 를 **포함해** 이하부터 온다 — " +
+            "목록 마지막 항목의 id 를 앱이 꺼내 쓰지 마라 (값이 다르고, 쓰면 마지막 항목이 중복된다). " +
+            "**멈출지는 `isPageEnd` 로 판단한다.** `isPageEnd == true` 이면 `nextNotificationId` 는 항상 null 이고, " +
+            "그 역도 성립한다 (null 이어도 키는 실려 나간다). " +
             "🔴 `size` 는 1~50 이며 **범위를 벗어나면 조용히 깎지 않고 거부한다** (HTTP 200 + code=700). " +
             "생략하면 20. " +
             "정렬 축이 `created_at` 이 아니라 `id` 인 것은 시계 역행 시 행이 조용히 건너뛰어지는 것을 " +
@@ -92,11 +95,11 @@ class NotificationController(
     @SecurityRequirement(name = "bearerAuth")
     fun getNotifications(
         @Parameter(
-            description = "직전 응답의 `nextCursor`. 생략하면 첫 페이지. " +
-                "숫자가 아니면 HTTP 200 + code=700.",
+            description = "직전 응답의 `nextNotificationId` 를 그대로. 이 id 를 **포함해** 그 이하부터 온다. " +
+                "생략하거나 빈 문자열이면 첫 페이지. 숫자가 아니면 HTTP 200 + code=700.",
             example = "38",
         )
-        @RequestParam(name = "cursor", required = false) cursor: String?,
+        @RequestParam(name = "nextNotificationId", required = false) nextNotificationId: String?,
         @Parameter(
             // 어노테이션 인자는 컴파일 타임 상수만 허용되므로 DEFAULT_SIZE 를 문자열 템플릿으로
             // 끼워 넣지 않는다. 값이 바뀌면 이 문구도 함께 고쳐야 한다.
@@ -109,13 +112,14 @@ class NotificationController(
         val userId: Long = currentUserId()
         val page: NotificationPage = notificationQueryService.getNotifications(
             userId = userId,
-            cursor = parseCursor(cursor),
+            nextNotificationId = parseNextNotificationId(nextNotificationId),
             size = parseSize(size),
         )
         return NotificationListResponse(
             data = NotificationListData(
                 notifications = page.notifications.map { it.toDto() },
-                nextCursor = page.nextCursor,
+                nextNotificationId = page.nextNotificationId,
+                isPageEnd = page.isPageEnd,
             ),
         )
     }
@@ -170,13 +174,13 @@ class NotificationController(
     // ─── helpers ─────────────────────────────────────────────────
 
     /**
-     * `?cursor=38` → `38L`. 값이 없거나 빈 문자열이면 **null**(= 첫 페이지)을 그대로 넘긴다 —
-     * 앱이 커서 없이 `?cursor=` 를 붙여 보내도 첫 진입이 깨지지 않는다.
+     * `?nextNotificationId=38` → `38L`. 값이 없거나 빈 문자열이면 **null**(= 첫 페이지)을 그대로 넘긴다 —
+     * 앱이 값 없이 `?nextNotificationId=` 를 붙여 보내도 첫 진입이 깨지지 않는다.
      *
      * 숫자가 아니면 [SnackbarException] — `Long?` 으로 바인딩했다면 HTTP 500 이 나갔을 자리다
      * (클래스 KDoc).
      */
-    private fun parseCursor(raw: String?): Long? {
+    private fun parseNextNotificationId(raw: String?): Long? {
         val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return trimmed.toLongOrNull() ?: throw SnackbarException("목록 위치가 올바르지 않아요")
     }
@@ -187,7 +191,7 @@ class NotificationController(
      * ## 🔴 범위를 벗어나면 clamp 하지 않고 **거부한다**
      *
      * `size=100` 을 조용히 50 으로 깎으면 앱은 **100건을 받았다고 믿는다.** 그러면 마지막 항목이
-     * 자기가 아는 100번째가 아니라 실제 50번째가 되고, 앱이 자체 계산한 커서로 다음 페이지를
+     * 자기가 아는 100번째가 아니라 실제 50번째가 되고, 앱이 자체 계산한 기준 id 로 다음 페이지를
      * 이어 붙이는 순간 **50건이 통째로 사라진다** — 예외도 로그도 없이. 거부하면 앱이 즉시 안다.
      * 보관함이 미래 달을 이번 달로 clamp 하지 않는 것과 같은 판단이다
      * (`ChallengeHistoryService.getHistories`: *"조용히 clamp 하면 응답 에코가 요청과 어긋난다"*).

@@ -19,23 +19,43 @@ data class NotificationListResponse(
 ) : BaseResponse()
 
 /**
- * 알림 한 페이지.
+ * 알림 한 페이지 (ADR-0014 shape).
  *
- * ⚠️ [nextCursor] 는 **null 이어도 키가 실려 나간다** — 이 프로젝트 Jackson 에
+ * ## 🔴 불변식 `isPageEnd == (nextNotificationId == null)`
+ *
+ * 두 값은 서비스의 `NotificationPage` 에서 **한 출처**로 만들어진다 — `isPageEnd` 는 거기서
+ * `nextNotificationId` 로부터 파생된다. 이 DTO 는 둘을 **그대로 옮기기만** 하고, 여기서 다시
+ * 계산하지 않는다. `NotificationControllerTest` 가 wire 원문으로 끝/중간/0건 세 경우를 고정한다.
+ *
+ * ⚠️ [nextNotificationId] 는 **null 이어도 키가 실려 나간다** — 이 프로젝트 Jackson 에
  * `@JsonInclude(NON_NULL)` 이 없기 때문이다. 모바일이 키 존재를 전제해도 되는 근거가 그것이고,
  * `NotificationControllerTest` 가 응답 **원문**으로 고정한다. 누가 전역 설정으로 NON_NULL 을
  * 켜면 목록 끝에서 키가 통째로 사라지고 앱의 실패 모드가 조용히 바뀐다.
  */
-@Schema(description = "알림 목록 + 다음 커서")
+@Schema(description = "알림 목록 + 페이지 끝 신호")
 data class NotificationListData(
     /** 최신순(`id` 내림차순). 알림이 없으면 **빈 배열**이다 (null 금지). */
     val notifications: List<NotificationDto>,
     /**
-     * 다음 페이지 요청에 그대로 실을 커서. **다음이 없으면 `null`** 이고 그게 목록의 끝이다.
-     * 값은 이 페이지 마지막 항목의 `notificationId` 다.
+     * 다음 요청의 `?nextNotificationId=` 에 **그대로** 실을 값. **다음 페이지 첫 항목의
+     * `notificationId`** 다(`size + 1` 조회의 초과분). **[isPageEnd] 가 `true` 이면 `null`.**
+     *
+     * 🔴 앱은 목록 마지막 항목의 id 를 꺼내 쓰지 않고 이 값을 되돌려 보낸다 (ADR-0014 §2) — 둘은
+     * **다른 값**이고, 요청이 포함 경계(`id <=`)라 마지막 항목 id 를 보내면 그 항목이 중복된다.
      */
-    @field:Schema(example = "38", nullable = true)
-    val nextCursor: Long?,
+    @field:Schema(
+        example = "38",
+        nullable = true,
+        description = "다음 페이지 첫 항목의 id. 다음 요청의 nextNotificationId 에 그대로 실을 값(포함 경계). " +
+            "isPageEnd=true 이면 null.",
+    )
+    val nextNotificationId: Long?,
+    /** 더 가져올 페이지가 없으면 `true`. **멈출지 판단은 이 값으로** 한다 (ADR-0014 §2). */
+    @field:Schema(
+        example = "false",
+        description = "더 가져올 페이지가 없으면 true. true 이면 nextNotificationId 는 null.",
+    )
+    val isPageEnd: Boolean,
 )
 
 /**

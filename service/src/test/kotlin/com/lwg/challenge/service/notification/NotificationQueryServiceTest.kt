@@ -25,16 +25,18 @@ import java.time.LocalDateTime
  * 1. **`size + 1` 을 읽는다.** 이 서비스의 존재 이유가 *"COUNT 없이 hasMore 를 안다"* 이고,
  *    그 구현이 저장소에 `size` 가 아니라 `size + 1` 을 넘기는 것 하나다.
  * 2. **초과분은 잘라 낸다.** 응답 목록은 언제나 `size` 이하다.
- * 3. **`nextCursor`** — 다음이 있으면 마지막 항목의 id, 없으면 null.
+ * 3. **`nextNotificationId` / `isPageEnd`** — 다음이 있으면 **초과분 1건(= 다음 페이지 첫 항목)의 id** + `false`,
+ *    없으면 null + `true`. 🔴 이번 페이지 마지막 항목의 id 가 **아니다** (ADR-0014 §3).
+ *    🔴 불변식 `isPageEnd == (nextNotificationId == null)` 을 끝·중간·0건 전부에서 단언한다 (ADR-0014 §2).
  * 4. 🔴 **정확히 `size` 건인 경계.** `size + 1` 을 읽었는데 `size` 만 왔으므로 **다음이 없다.**
  *    한 칸 틀리면 여기서만 깨진다 — 다른 케이스는 전부 통과한다.
- * 5. **`cursor` 는 해석하지 않고 그대로 저장소에 넘긴다.**
+ * 5. **`nextNotificationId` 는 해석하지 않고 그대로 저장소에 넘긴다.**
  * 6. **`type` 이 enum 이 아니라 String** 으로 매핑된다 (열린 집합 결정 — `NotificationDto` KDoc).
  * 7. **`getUnreadCount`** — 저장소가 센 값을 그대로 `Int` 로 돌려주고, 읽은 행·남의 행은 세지 않는다.
  *    (상태를 **바꾸는** 쪽은 여기가 아니라 [NotificationCommandServiceTest] 다.)
  * 8. 🔴 **`referencePending` 3값 산출 + 배치 조회의 호출 규약** — 아래 §5.
  *
- * ⚠️ **저장소를 흉내낸 것은 `id DESC` 정렬 · `id < cursor` 필터 · `limit` 까지다.** 실제 JPQL 이
+ * ⚠️ **저장소를 흉내낸 것은 `id DESC` 정렬 · `id <= nextNotificationId`(포함 경계) 필터 · `limit` 까지다.** 실제 JPQL 이
  * 같은 규칙으로 자르는지는 여기서 알 수 없다 — fake 가 같은 규칙을 다시 구현할 뿐이다.
  *
  * fake 를 **중첩 클래스**로 둔 이유: 같은 패키지의 `NotificationDispatcherTest` 가 top-level
@@ -60,57 +62,61 @@ class NotificationQueryServiceTest {
 
     // ─── 1. 건수별 동작 ──────────────────────────────────────────
 
-    /** 알림이 하나도 없으면 빈 목록이고 커서도 없다 — 빈 목록은 **에러가 아니라 정상**이다. */
+    /** 알림이 하나도 없으면 빈 목록이고 끝이다 — 빈 목록은 **에러가 아니라 정상**이다. */
     @Test
-    fun `알림이 0건이면 빈 목록이고 nextCursor 가 null 이다`() {
-        val page = service.getNotifications(me, cursor = null, size = 20)
+    fun `알림이 0건이면 빈 목록이고 isPageEnd 가 true 이고 nextNotificationId 가 null 이다`() {
+        val page = service.getNotifications(me, nextNotificationId = null, size = 20)
 
         assertTrue(page.notifications.isEmpty())
-        assertNull(page.nextCursor, "더 읽을 것이 없으면 커서가 없다")
+        assertNull(page.nextNotificationId, "더 읽을 것이 없으면 다음 요청 값이 없다")
+        assertTrue(page.isPageEnd, "0건도 끝이다")
     }
 
     @Test
-    fun `size 보다 적으면 전부 반환하고 nextCursor 가 null 이다`() {
+    fun `size 보다 적으면 전부 반환하고 끝 페이지다`() {
         put(id = 10L)
         put(id = 11L)
         put(id = 12L)
 
-        val page = service.getNotifications(me, cursor = null, size = 20)
+        val page = service.getNotifications(me, nextNotificationId = null, size = 20)
 
         assertEquals(listOf(12L, 11L, 10L), page.notifications.map { it.notificationId }, "최신순(id DESC)")
-        assertNull(page.nextCursor)
+        assertNull(page.nextNotificationId)
+        assertTrue(page.isPageEnd)
     }
 
     /**
      * 🔴 **경계 — 정확히 `size` 건.**
      *
      * `size + 1` 을 요청했는데 `size` 만 돌아왔다 ⇒ 초과분이 없다 ⇒ **다음 페이지가 없다.**
-     * 여기서 `nextCursor` 가 실려 나가면 앱이 빈 페이지를 한 번 더 왕복하고, 그 왕복은
+     * 여기서 `nextNotificationId` 가 실려 나가고 `isPageEnd = false` 가 되면 앱이 빈 페이지를 한 번 더 왕복하고, 그 왕복은
      * *"목록 끝에서 스피너가 한 번 더 돈다"* 로만 보여 버그로 신고되지 않는다.
      */
     @Test
-    fun `정확히 size 만큼 있으면 전부 반환하고 nextCursor 가 null 이다`() {
+    fun `정확히 size 만큼 있으면 전부 반환하고 끝 페이지다`() {
         (1L..3L).forEach { put(id = it) }
 
-        val page = service.getNotifications(me, cursor = null, size = 3)
+        val page = service.getNotifications(me, nextNotificationId = null, size = 3)
 
         assertEquals(3, page.notifications.size)
         assertEquals(listOf(3L, 2L, 1L), page.notifications.map { it.notificationId })
-        assertNull(page.nextCursor, "size + 1 을 읽어 초과분이 없었으므로 다음은 없다")
+        assertNull(page.nextNotificationId, "size + 1 을 읽어 초과분이 없었으므로 다음은 없다")
+        assertTrue(page.isPageEnd, "size + 1 을 읽어 초과분이 없었으므로 끝이다")
     }
 
     @Test
-    fun `size 보다 많으면 size 개만 반환하고 nextCursor 가 마지막 항목의 id 다`() {
+    fun `size 보다 많으면 size 개만 반환하고 nextNotificationId 가 초과분의 id 다`() {
         (1L..10L).forEach { put(id = it) }
 
-        val page = service.getNotifications(me, cursor = null, size = 3)
+        val page = service.getNotifications(me, nextNotificationId = null, size = 3)
 
         assertEquals(listOf(10L, 9L, 8L), page.notifications.map { it.notificationId })
         assertEquals(
-            8L,
-            page.nextCursor,
-            "다음 요청은 이 id 미만부터 읽는다 — 초과분 7 이 아니라 마지막으로 **반환한** 8 이다",
+            7L,
+            page.nextNotificationId,
+            "다음 페이지 첫 항목 = 잘라 낸 초과분 7 이다 — 마지막으로 **반환한** 8 이 아니다 (ADR-0014 §3)",
         )
+        assertFalse(page.isPageEnd, "초과분이 있었으므로 끝이 아니다")
     }
 
     // ─── 2. 저장소에 넘기는 인자 ─────────────────────────────────
@@ -121,43 +127,76 @@ class NotificationQueryServiceTest {
      */
     @Test
     fun `저장소에는 limit 으로 size + 1 이 전달된다`() {
-        service.getNotifications(me, cursor = null, size = 20)
+        service.getNotifications(me, nextNotificationId = null, size = 20)
 
         assertEquals(21, notifications.lastLimit)
     }
 
     @Test
     fun `size 가 1 이어도 limit 은 2 다`() {
-        service.getNotifications(me, cursor = null, size = 1)
+        service.getNotifications(me, nextNotificationId = null, size = 1)
 
         assertEquals(2, notifications.lastLimit)
     }
 
-    /** 커서는 이 서비스가 해석하지 않는다 — 그대로 흘려보낸다 (`id < cursor` 판정은 저장소 몫). */
+    /** `nextNotificationId` 는 이 서비스가 해석하지 않는다 — 그대로 흘려보낸다 (`id <=` 판정은 저장소 몫). */
     @Test
-    fun `cursor 가 그대로 저장소에 전달된다`() {
-        service.getNotifications(me, cursor = 38L, size = 20)
+    fun `nextNotificationId 가 그대로 저장소에 전달된다`() {
+        service.getNotifications(me, nextNotificationId = 38L, size = 20)
 
-        assertEquals(38L, notifications.lastCursor)
+        assertEquals(38L, notifications.requestedNextNotificationId)
         assertEquals(me, notifications.lastUserId)
     }
 
     @Test
-    fun `cursor 가 null 이면 null 그대로 전달된다 - 첫 페이지`() {
-        service.getNotifications(me, cursor = null, size = 20)
+    fun `nextNotificationId 가 null 이면 null 그대로 전달된다 - 첫 페이지`() {
+        service.getNotifications(me, nextNotificationId = null, size = 20)
 
-        assertNull(notifications.lastCursor, "첫 페이지는 커서 없이 최신부터다")
+        assertNull(notifications.requestedNextNotificationId, "첫 페이지는 최신부터다")
     }
 
-    /** 커서 이후 페이지도 같은 규칙으로 이어진다 — 커서로 받은 행 자신은 다시 나오지 않는다. */
+    /** 🔴 **포함 경계** — `nextNotificationId` 행 자신이 다음 페이지의 **첫 행**이다. */
     @Test
-    fun `cursor 이후 페이지는 그 id 미만부터 이어진다`() {
+    fun `nextNotificationId 를 보내면 그 id 를 포함해 이하부터 이어진다`() {
         (1L..10L).forEach { put(id = it) }
 
-        val page = service.getNotifications(me, cursor = 8L, size = 3)
+        val page = service.getNotifications(me, nextNotificationId = 8L, size = 3)
 
-        assertEquals(listOf(7L, 6L, 5L), page.notifications.map { it.notificationId })
-        assertEquals(5L, page.nextCursor)
+        assertEquals(listOf(8L, 7L, 6L), page.notifications.map { it.notificationId })
+        assertEquals(5L, page.nextNotificationId)
+        assertFalse(page.isPageEnd)
+    }
+
+    /**
+     * 🔴 **불변식 `isPageEnd == (nextNotificationId == null)` — 끝까지 걸으며 매 페이지 단언한다.**
+     *
+     * ADR-0014 가 끝 신호를 둘로 늘렸고 이 단언이 **유일한 방어**다. 앱이 하는 그대로 — 받은
+     * `nextNotificationId` 를 되돌려 보내고 `isPageEnd` 에서 멈춘다 — 걸어서 중간 페이지(false) 와
+     * 끝 페이지(true) 를 한 번에 지나간다. 중복 0 / 누락 0 도 함께 본다 — 🔴 포함 경계라 응답 값을
+     * 마지막 항목 id 로 잘못 내면 **경계 항목이 두 번** 나오고, 그게 여기서 깨진다.
+     */
+    @Test
+    fun `끝까지 걸으면 매 페이지에서 isPageEnd 와 nextNotificationId 가 어긋나지 않는다`() {
+        (1L..7L).forEach { put(id = it) }
+
+        val pages = mutableListOf<NotificationPage>()
+        var next: Long? = null
+        do {
+            val page = service.getNotifications(me, nextNotificationId = next, size = 3)
+            pages += page
+            next = page.nextNotificationId
+        } while (!page.isPageEnd && pages.size < 10)
+
+        assertEquals(listOf(false, false, true), pages.map { it.isPageEnd }, "3 + 3 + 1 — 마지막만 끝이다")
+        assertEquals(listOf(4L, 1L, null), pages.map { it.nextNotificationId }, "다음 페이지 첫 항목의 id")
+        pages.forEach { page ->
+            assertEquals(page.nextNotificationId == null, page.isPageEnd, "끝 신호 두 개가 어긋났다: $page")
+        }
+        assertEquals(
+            (7L downTo 1L).toList(),
+            pages.flatMap { it.notifications }.map { it.notificationId },
+            "중복 0 / 누락 0",
+        )
     }
 
     // ─── 3. 뷰 매핑 ──────────────────────────────────────────────
@@ -173,7 +212,7 @@ class NotificationQueryServiceTest {
     fun `type 이 enum 이 아니라 enum name 문자열로 매핑된다`() {
         put(id = 57L, type = NotificationType.CHALLENGE_ACCEPTED)
 
-        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+        val view = service.getNotifications(me, nextNotificationId = null, size = 20).notifications.single()
 
         // 🔴 컴파일 타임 고정 — `type` 이 enum 으로 되돌아가면 이 대입이 컴파일되지 않는다.
         val type: String = view.type
@@ -192,7 +231,7 @@ class NotificationQueryServiceTest {
             createdAt = LocalDateTime.of(2026, 9, 1, 13, 42, 7),
         )
 
-        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+        val view = service.getNotifications(me, nextNotificationId = null, size = 20).notifications.single()
 
         assertEquals(57L, view.notificationId)
         // 🔴 title 은 뷰에 없다 — 저장은 하되(위 put 이 넣는다) 화면이 그리지 않는다
@@ -207,7 +246,7 @@ class NotificationQueryServiceTest {
     fun `referenceId 는 null 일 수 있다`() {
         put(id = 58L, referenceId = null)
 
-        assertNull(service.getNotifications(me, cursor = null, size = 20).notifications.single().referenceId)
+        assertNull(service.getNotifications(me, nextNotificationId = null, size = 20).notifications.single().referenceId)
     }
 
     /** 남의 알림은 보이지 않는다 — 수신함은 본인만 읽는 개인 데이터다. */
@@ -218,7 +257,7 @@ class NotificationQueryServiceTest {
 
         assertEquals(
             listOf(61L),
-            service.getNotifications(me, cursor = null, size = 20).notifications.map { it.notificationId },
+            service.getNotifications(me, nextNotificationId = null, size = 20).notifications.map { it.notificationId },
         )
     }
 
@@ -279,7 +318,7 @@ class NotificationQueryServiceTest {
         challenges.put(challenge(id = 1001L, opponentId = me, deadline = now.plusHours(5)))
         put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
 
-        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+        val view = service.getNotifications(me, nextNotificationId = null, size = 20).notifications.single()
 
         assertEquals(true, view.referencePending)
     }
@@ -295,7 +334,7 @@ class NotificationQueryServiceTest {
         // 챌린저가 취소해 row 가 물리 삭제된 경우 — 저장소에 아예 없다.
         put(id = 58L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 2002L)
 
-        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+        val views = service.getNotifications(me, nextNotificationId = null, size = 20).notifications
 
         assertEquals(false, views.first { it.notificationId == 57L }.referencePending, "처리됨")
         assertEquals(false, views.first { it.notificationId == 58L }.referencePending, "삭제됨")
@@ -318,7 +357,7 @@ class NotificationQueryServiceTest {
         put(id = 58L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1002L)
         put(id = 59L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1003L)
 
-        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+        val views = service.getNotifications(me, nextNotificationId = null, size = 20).notifications
 
         assertEquals(false, views.first { it.notificationId == 57L }.referencePending, "이미 지났다")
         assertEquals(false, views.first { it.notificationId == 58L }.referencePending, "정각은 이미 만료다 (> 경계)")
@@ -335,7 +374,7 @@ class NotificationQueryServiceTest {
     fun `CHALLENGE_REQUEST 는 referenceId 가 null 이면 referencePending 이 false 다`() {
         put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = null)
 
-        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+        val view = service.getNotifications(me, nextNotificationId = null, size = 20).notifications.single()
 
         assertEquals(false, view.referencePending, "null 이 아니라 false 다 — non-null 보장이 계약이다")
         assertEquals(0, challenges.callCount, "물어볼 id 가 없으면 쿼리도 없다")
@@ -355,7 +394,7 @@ class NotificationQueryServiceTest {
         put(id = 58L, type = NotificationType.CHALLENGE_ACCEPTED, referenceId = 1001L)
         put(id = 59L, type = NotificationType.CHALLENGE_REJECTED, referenceId = 1001L)
 
-        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+        val views = service.getNotifications(me, nextNotificationId = null, size = 20).notifications
 
         assertEquals(3, views.size)
         views.forEach { assertNull(it.referencePending, "type=${it.type} 에는 이 개념이 없다") }
@@ -372,7 +411,7 @@ class NotificationQueryServiceTest {
         put(id = 57L, type = NotificationType.CHALLENGE_ACCEPTED, referenceId = 1001L)
         put(id = 58L, type = NotificationType.OPPONENT_VERIFIED, referenceId = 1002L)
 
-        service.getNotifications(me, cursor = null, size = 20)
+        service.getNotifications(me, nextNotificationId = null, size = 20)
 
         assertEquals(0, challenges.callCount, "빈 IN 절을 던지지 않는다")
     }
@@ -390,7 +429,7 @@ class NotificationQueryServiceTest {
         put(id = 58L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1002L)
         put(id = 59L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1003L)
 
-        val views = service.getNotifications(me, cursor = null, size = 20).notifications
+        val views = service.getNotifications(me, nextNotificationId = null, size = 20).notifications
 
         assertEquals(1, challenges.callCount, "행마다 부르면 그게 N+1 이다")
         assertTrue(views.all { it.referencePending == true })
@@ -410,7 +449,7 @@ class NotificationQueryServiceTest {
         put(id = 59L, type = NotificationType.FRIEND_REQUEST, referenceId = 3003L)
         put(id = 60L, type = NotificationType.CHALLENGE_REQUEST, referenceId = null)
 
-        service.getNotifications(me, cursor = null, size = 20)
+        service.getNotifications(me, nextNotificationId = null, size = 20)
 
         assertEquals(setOf(1001L), challenges.lastIds, "다른 타입의 참조 대상은 challenges 가 아니다")
         assertEquals(me, challenges.lastOpponentId, "판정 주체는 알림 수신자다")
@@ -430,7 +469,7 @@ class NotificationQueryServiceTest {
         // id DESC 라 이 행이 3번째 = size 2 의 초과분이다.
         put(id = 55L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1003L)
 
-        val page = service.getNotifications(me, cursor = null, size = 2)
+        val page = service.getNotifications(me, nextNotificationId = null, size = 2)
 
         assertEquals(listOf(57L, 56L), page.notifications.map { it.notificationId })
         assertEquals(setOf(1001L, 1002L), challenges.lastIds, "초과분 1003 이 섞이면 안 읽을 행을 묻는 것이다")
@@ -442,7 +481,7 @@ class NotificationQueryServiceTest {
         challenges.put(challenge(id = 1001L, opponentId = other, deadline = now.plusHours(5)))
         put(id = 57L, type = NotificationType.CHALLENGE_REQUEST, referenceId = 1001L)
 
-        val view = service.getNotifications(me, cursor = null, size = 20).notifications.single()
+        val view = service.getNotifications(me, nextNotificationId = null, size = 20).notifications.single()
 
         assertFalse(view.referencePending!!, "내가 opponent 가 아니면 내가 응답할 대상이 아니다")
     }
@@ -497,8 +536,8 @@ class NotificationQueryServiceTest {
     /**
      * 실제 구현과 **같은 필터·정렬·limit** 을 지킨다 — 어긋나면 이 테스트가 거짓말을 한다.
      *
-     * 정렬은 `id DESC`, 커서는 `id < cursor`, 개수는 `take(limit)` 이다.
-     * [lastLimit] / [lastCursor] / [lastUserId] 로 *"서비스가 무엇을 요청했는가"* 를 단언한다.
+     * 정렬은 `id DESC`, 다음 페이지는 `id <= nextNotificationId`(포함 경계 — JPQL 과 같다), 개수는 `take(limit)` 이다.
+     * [lastLimit] / [requestedNextNotificationId] / [lastUserId] 로 *"서비스가 무엇을 요청했는가"* 를 단언한다.
      */
     private class FakeNotificationStore : NotificationRepository {
         private val store = LinkedHashMap<Long, Notification>()
@@ -506,7 +545,7 @@ class NotificationQueryServiceTest {
         var lastUserId: Long? = null
             private set
 
-        var lastCursor: Long? = null
+        var requestedNextNotificationId: Long? = null
             private set
 
         var lastLimit: Int? = null
@@ -519,13 +558,13 @@ class NotificationQueryServiceTest {
             store[n.id!!] = n
         }
 
-        override fun findPageByUserId(userId: Long, cursor: Long?, limit: Int): List<Notification> {
+        override fun findPageByUserId(userId: Long, nextNotificationId: Long?, limit: Int): List<Notification> {
             lastUserId = userId
-            lastCursor = cursor
+            requestedNextNotificationId = nextNotificationId
             lastLimit = limit
             return store.values
                 .filter { it.userId == userId }
-                .filter { cursor == null || it.id!! < cursor }
+                .filter { nextNotificationId == null || it.id!! <= nextNotificationId }
                 .sortedByDescending { it.id }
                 .take(limit)
         }

@@ -20,14 +20,14 @@ import java.time.LocalDateTime
  *
  * *"다음 페이지가 있나"* 를 답하는 방법은 둘이다: 전체 건수를 세거나(`COUNT`), **한 건 더 읽어
  * 보거나.** 후자를 택했다. 커서 페이지네이션은 전체 건수를 **어디에도 쓰지 않으므로**
- * (`nextCursor` 하나만 내려간다) COUNT 는 순수한 추가 쿼리다 — 알림이 쌓일수록 매 스크롤마다
+ * (`nextNotificationId` / `isPageEnd` 만 내려간다) COUNT 는 순수한 추가 쿼리다 — 알림이 쌓일수록 매 스크롤마다
  * 전체 테이블을 세는 비용이 커진다.
  *
  * 그래서 저장소에는 항상 `size + 1` 이 간다. 돌아온 건수가 `size` 를 넘으면 다음이 있는 것이고,
  * 넘은 1건은 **응답에서 잘라 버린다** ([NotificationPage.notifications] 는 정확히 `size` 이하다).
  *
  * ⚠️ **정확히 `size` 건이 있는 경계**가 이 방식의 유일한 함정이다 — `size + 1` 을 요청했는데
- * `size` 만 돌아오므로 `hasMore = false` 다. COUNT 방식이었다면 여기서 `nextCursor` 를 실어
+ * `size` 만 돌아오므로 `hasMore = false` 다. COUNT 방식이었다면 여기서 `nextNotificationId` 를 실어
  * 앱이 빈 페이지를 한 번 더 왕복했을 자리다.
  *
  * 정렬·커서 축이 `createdAt` 이 아니라 `id` 인 근거는 `NotificationJpaRepository` KDoc 에 있다.
@@ -66,15 +66,15 @@ class NotificationQueryService(
     /**
      * [userId] 의 알림을 최신순으로 한 페이지 반환한다.
      *
-     * @param cursor 직전 페이지의 [NotificationPage.nextCursor]. **null 이면 첫 페이지.**
-     *   그대로 저장소에 넘어간다 — 이 서비스는 커서를 해석하지 않는다.
+     * @param nextNotificationId 직전 응답의 [NotificationPage.nextNotificationId]. **null 이면 첫 페이지.**
+     *   그대로 저장소에 넘어간다 — 이 서비스는 이 값을 해석하지 않는다.
      * @param size 화면이 원하는 건수. **1 이상**을 전제한다 — 범위 검증(1..50)은 컨트롤러가
      *   이미 끝냈고, 여기서 다시 clamp 하면 검증이 두 곳에 살면서 서로 다른 답을 낼 수 있다.
      */
     @Transactional(readOnly = true)
-    fun getNotifications(userId: Long, cursor: Long?, size: Int): NotificationPage {
+    fun getNotifications(userId: Long, nextNotificationId: Long?, size: Int): NotificationPage {
         // 🔴 size 가 아니라 size + 1 이다 — 초과분 1건의 존재가 곧 hasMore 다.
-        val rows: List<Notification> = notificationRepository.findPageByUserId(userId, cursor, size + 1)
+        val rows: List<Notification> = notificationRepository.findPageByUserId(userId, nextNotificationId, size + 1)
         val hasMore: Boolean = rows.size > size
         // 🔴 초과분을 잘라 낸 **최종 페이지**를 기준으로 판정한다 — 응답에 나가지 않을 1건의
         //    referenceId 까지 두 번째 쿼리에 실으면 안 쓸 행을 묻는 것이다.
@@ -84,8 +84,16 @@ class NotificationQueryService(
 
         return NotificationPage(
             notifications = page,
-            // 다음 페이지는 이 페이지의 **마지막 id 미만**부터다 (저장소가 `id < cursor` 로 자른다).
-            nextCursor = if (hasMore) page.last().notificationId else null,
+            // 🔴 값은 잘라 낸 **초과분 1건(= 다음 페이지 첫 항목)의 id** 다 — 이번 페이지 마지막 id 가 아니다.
+            //    다음 요청은 이 id 를 **포함해** 읽는다 (저장소가 `id <= nextNotificationId` 로 자른다, ADR-0014 §3).
+            // 🔴 끝 신호 두 개(이 값 / isPageEnd)의 출처는 hasMore 하나다 — isPageEnd 는 이 값에서
+            //    파생되므로 여기서 따로 계산하지 않는다 ([NotificationPage.isPageEnd] KDoc).
+            //    id 가 null 이면 isPageEnd 가 조용히 true 로 뒤집히므로 toView 와 같이 끊는다.
+            nextNotificationId = if (hasMore) {
+                rows[size].id ?: error("영속화된 notification 의 id 는 null 일 수 없습니다")
+            } else {
+                null
+            },
         )
     }
 
@@ -151,20 +159,32 @@ class NotificationQueryService(
 }
 
 /**
- * 알림 한 페이지 — 목록 **과 다음 커서**.
+ * 알림 한 페이지 — 목록 **과 끝 신호 2개**([nextNotificationId] / [isPageEnd]).
  *
  * `isRead` 는 이 응답 어디에도 없다 (의도적 부재 — [NotificationView] KDoc).
+ *
+ * ## 🔴 [isPageEnd] 를 생성자로 받지 않는다 — 불변식 `isPageEnd == (nextNotificationId == null)`
+ *
+ * ADR-0014 가 `isPageEnd` 불리언을 허용하면서 *"끝"* 을 말하는 신호가 둘이 됐다. 둘이 따로 채워지면
+ * 언젠가 *"끝이 아닌데 다음 값이 없다"* 같은 조합이 조용히 나간다. 그래서 [isPageEnd] 는
+ * [nextNotificationId] 에서 **파생**되고, 어긋난 조합은 **만들 수 없다.** 두 값의 출처는
+ * `getNotifications` 의 `size + 1` 초과분 유무(`hasMore`) 하나다.
  */
 data class NotificationPage(
     /** 최신순(`id` 내림차순). 알림이 없으면 **빈 리스트**다 — 빈 목록은 정상 응답이다. */
     val notifications: List<NotificationView>,
     /**
-     * 다음 페이지 요청에 실을 커서. **다음이 없으면 null** 이고, 그 null 이 목록의 끝을 뜻한다.
+     * 다음 페이지 요청에 그대로 실을 값. **다음이 없으면 null** 이다.
      *
-     * 값은 [notifications] 의 **마지막 항목 id** 다 — 다음 요청은 그 id **미만**부터 읽는다.
+     * 값은 **다음 페이지 첫 항목의 id** — `size + 1` 조회에서 잘라 낸 초과분 1건의 id 다. 다음 요청은
+     * 그 id 를 **포함해** 이하부터 읽는다. 🔴 [notifications] 의 마지막 항목 id 와 **다르다**.
      */
-    val nextCursor: Long?,
-)
+    val nextNotificationId: Long?,
+) {
+    /** 더 가져올 페이지가 없으면 `true`. 🔴 [nextNotificationId] 에서 파생된다 — 클래스 KDoc. */
+    val isPageEnd: Boolean
+        get() = nextNotificationId == null
+}
 
 /**
  * 알림 1건의 뷰 모델.

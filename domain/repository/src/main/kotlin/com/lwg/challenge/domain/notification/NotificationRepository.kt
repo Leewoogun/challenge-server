@@ -22,13 +22,14 @@ interface NotificationRepository {
      * (요약: `createdAt` 은 DB DEFAULT 가 아니라 애플리케이션이 채워 보내는 값이라 삽입 순서와
      * 어긋날 수 있고, 커서가 그 위에 서면 행이 조용히 건너뛰어진다).
      *
-     * @param cursor 이 값 **미만**의 `id` 만 반환한다. **null 이면 첫 페이지**다 (커서 없이 최신부터).
+     * @param nextNotificationId 이 값 **이하**(🔴 포함 경계)의 `id` 만 반환한다. **null 이면 첫 페이지**다 (최신부터).
+     *   직전 응답이 준 **다음 페이지 첫 항목의 id** 다 (ADR-0014 — 요청·응답이 같은 이름을 쓴다).
      * @param limit 읽어 올 최대 건수. 🔴 호출부는 화면이 요청한 `size` 가 아니라 **`size + 1`** 을
      *   넣는다 — 그 초과분 1건이 존재하는지가 곧 *"다음 페이지가 있나"* 의 답이고, 그래야 COUNT
      *   쿼리 없이 판정된다 (`NotificationQueryService.getNotifications`).
      * @return `id` 내림차순 목록. 해당 구간에 알림이 없으면 **빈 리스트**다 (null 아님).
      */
-    fun findPageByUserId(userId: Long, cursor: Long?, limit: Int): List<Notification>
+    fun findPageByUserId(userId: Long, nextNotificationId: Long?, limit: Int): List<Notification>
 
     /**
      * [userId] 의 **안 읽은** 알림 개수 — 홈 벨 뱃지가 보는 값.

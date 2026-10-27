@@ -10,7 +10,7 @@ import org.springframework.data.repository.query.Param
 /**
  * notifications 테이블 CRUD. 모듈 외부에 노출되지 않는다 (NotificationRepositoryImpl 만 사용).
  *
- * 알림 목록 화면이 붙으면서 조회 2개가 생겼다 ([findFirstPageByUserId] / [findPageByUserIdBefore]).
+ * 알림 목록 화면이 붙으면서 조회 2개가 생겼다 ([findFirstPageByUserId] / [findPageByUserIdFrom]).
  * (맨 아래 삭제는 조회가 아니라 탈퇴 정리다.)
  *
  * 홈 벨 뱃지가 붙으면서 읽음 축 2개가 더 생겼다 ([countUnreadByUserId] / [markAllAsReadByUserId]).
@@ -24,7 +24,7 @@ import org.springframework.data.repository.query.Param
  * `notifications.created_at` 은 **DB DEFAULT 가 아니다** — `NotificationEntity` 가
  * `KstTime.now()` 로 값을 채워 INSERT 에 실어 보낸다. 그래서 애플리케이션 시계가 NTP 보정으로
  * **뒤로 밀리면** 나중에 삽입된 행이 더 이른 `created_at` 을 갖는 구간이 생긴다. 커서가 그 위에
- * 서면 `created_at < :cursor` 판정이 어긋난 구간의 행을 통째로 건너뛰는데, 🔴 **예외도 로그도
+ * 서면 `created_at < (직전 페이지 마지막 값)` 판정이 어긋난 구간의 행을 통째로 건너뛰는데, 🔴 **예외도 로그도
  * 남지 않는다** — 사용자에게는 "알림이 그냥 안 왔다" 로만 보이고 서버는 정상으로 보고한다.
  *
  * `id` 는 `BIGSERIAL` 이라 시퀀스가 발급하므로 **삽입 순서와 정확히 일치**하고 **동률이 없다.**
@@ -45,11 +45,11 @@ import org.springframework.data.repository.query.Param
 interface NotificationJpaRepository : JpaRepository<NotificationEntity, Long> {
 
     /**
-     * 커서 없는 **첫 페이지** — [userId] 의 최신 알림부터 `id` 내림차순.
+     * `nextNotificationId` 없는 **첫 페이지** — [userId] 의 최신 알림부터 `id` 내림차순.
      *
-     * ## 🔴 `(:cursor IS NULL OR n.id < :cursor)` 단일 쿼리를 쓰지 않았다
+     * ## 🔴 `(:nextNotificationId IS NULL OR n.id <= :nextNotificationId)` 단일 쿼리를 쓰지 않았다
      *
-     * 그 형태는 바인딩되는 `cursor` 가 null 일 때 **파라미터의 타입을 Hibernate 가 추론할 근거가
+     * 그 형태는 바인딩되는 `nextNotificationId` 가 null 일 때 **파라미터의 타입을 Hibernate 가 추론할 근거가
      * 없어** 드라이버/방언 조합에 따라 판단이 갈리는 지점이다 (Postgres 는 타입 없는 파라미터
      * 비교를 거부할 수 있다). 분기를 **메서드 2개**로 올려 두면 각 쿼리의 파라미터가 항상
      * non-null 이라 그 문제 자체가 생기지 않는다. 분기는 `NotificationRepositoryImpl` 이 한다.
@@ -69,22 +69,25 @@ interface NotificationJpaRepository : JpaRepository<NotificationEntity, Long> {
     fun findFirstPageByUserId(@Param("userId") userId: Long, pageable: Pageable): List<NotificationEntity>
 
     /**
-     * 커서 이후 페이지 — [cursor] **미만**의 `id` 를 내림차순으로.
+     * 다음 페이지 — [nextNotificationId] **이하**의 `id` 를 내림차순으로.
      *
-     * `<` 라서 커서로 받은 행 자신은 다시 나오지 않는다 (커서 = 직전 페이지의 마지막 id).
+     * 🔴 **포함 경계(`<=`)다** (ADR-0014 §3). [nextNotificationId] 는 직전 응답이 `size + 1` 조회의
+     * 초과분으로 준 **다음 페이지 첫 항목의 id** 라, 그 행 자신이 이 페이지의 첫 행이어야 한다.
+     * `<` 로 쓰면 페이지 경계마다 **1건씩 조용히 누락된다.** 그 사이 해당 행이 삭제됐어도 `<=` 라
+     * 그 이하가 그대로 이어진다.
      * [findFirstPageByUserId] 와 나눈 이유·`pageable`·COUNT 는 그쪽 KDoc 과 같다.
      */
     @Query(
         """
         SELECT n FROM NotificationEntity n
          WHERE n.userId = :userId
-           AND n.id < :cursor
+           AND n.id <= :nextNotificationId
          ORDER BY n.id DESC
         """,
     )
-    fun findPageByUserIdBefore(
+    fun findPageByUserIdFrom(
         @Param("userId") userId: Long,
-        @Param("cursor") cursor: Long,
+        @Param("nextNotificationId") nextNotificationId: Long,
         pageable: Pageable,
     ): List<NotificationEntity>
 

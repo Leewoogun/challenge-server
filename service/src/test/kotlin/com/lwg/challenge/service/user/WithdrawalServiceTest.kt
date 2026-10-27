@@ -657,7 +657,7 @@ private class RecordingNotificationRepository : NotificationRepository {
     override fun save(notification: Notification): Notification = error("탈퇴 경로는 알림을 저장하지 않는다")
 
     /** 탈퇴 경로는 **지우기만** 한다 — 목록 조회는 `NotificationQueryServiceTest` 소관이다. */
-    override fun findPageByUserId(userId: Long, cursor: Long?, limit: Int): List<Notification> =
+    override fun findPageByUserId(userId: Long, nextNotificationId: Long?, limit: Int): List<Notification> =
         error("탈퇴 경로는 알림을 조회하지 않는다")
 
     /** 탈퇴 경로는 뱃지를 세지 않는다 — 지워질 수신함의 안 읽은 개수는 의미가 없다. */

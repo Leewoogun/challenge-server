@@ -218,7 +218,7 @@ class NotificationCommandServiceTest {
         override fun save(notification: Notification): Notification =
             error("읽음 처리 서비스가 저장을 시도했다")
 
-        override fun findPageByUserId(userId: Long, cursor: Long?, limit: Int): List<Notification> =
+        override fun findPageByUserId(userId: Long, nextNotificationId: Long?, limit: Int): List<Notification> =
             error("읽음 처리 서비스가 목록을 조회했다 — 그건 NotificationQueryService 소관이다")
 
         override fun deleteAllByUserId(userId: Long): Int =
