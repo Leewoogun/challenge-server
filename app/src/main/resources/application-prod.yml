@@ -1,0 +1,28 @@
+# 운영 프로필 — SPRING_PROFILES_ACTIVE=prod 로 켠다 (deploy/docker-compose.yml 에서 주입).
+# application.yml 위에 덮어쓰는 값만 둔다.
+#
+# 🔒 테스트 로그인(challenge.dev.test-login.enabled)은 여기서 끄지 않는다 — 이미 fail-closed 라
+#    "켜지 않으면 꺼져 있다"(TestLoginEnabledCondition). 운영 .env 에 그 변수를 넣지 않는 것이 끄는 방법이다.
+#    프로필에 묶지 않는 이유도 같은 클래스 KDoc 참조.
+
+spring:
+  jpa:
+    properties:
+      hibernate:
+        format_sql: false
+
+# 리버스 프록시(Nginx) 뒤에서 X-Forwarded-For / X-Forwarded-Proto 를 신뢰한다.
+# 없으면 요청 IP 가 전부 Nginx 컨테이너 IP 로, scheme 이 http 로 보인다.
+server:
+  forward-headers-strategy: native
+
+# Swagger 는 운영 기본 비공개. 잠깐 열어야 하면 SWAGGER_ENABLED=true 로 재기동.
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:false}
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:false}
+
+logging:
+  level:
+    org.hibernate.SQL: info

@@ -1,0 +1,113 @@
+# challenge-server 운영 구성 (EC2 한 대). 사용법은 deploy/README.md.
+#
+# - app / postgres / redis : 항상 뜬다. 로컬 검증도 이 셋으로 한다.
+# - nginx / certbot        : `https` 프로필. EC2 의 .env 에 COMPOSE_PROFILES=https 를 두면 함께 뜬다.
+#
+# 데이터(DB, 사진)는 named volume 에 둔다 — /var/lib/docker/volumes 아래, 즉 EC2 루트 EBS 에 있으므로
+# EBS 스냅샷이 함께 백업한다. 바인드 마운트 대신 named volume 인 이유: 빈 볼륨이 이미지의
+# /data/photos 소유권(UID 10001)을 물려받아 권한 문제가 생기지 않는다.
+
+services:
+  app:
+    image: ${APP_IMAGE:-challenge-server:local}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL: jdbc:postgresql://postgres:5432/challenge
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CHALLENGE_PHOTO_ROOT: /data/photos
+    volumes:
+      - photos:/data/photos
+      # FCM 서비스 계정 키. .env 의 FCM_CREDENTIALS_PATH=/run/secrets/fcm.json 과 짝이다.
+      - ./secrets:/run/secrets:ro
+    # 127.0.0.1 에만 바인딩 — 외부 공개는 nginx 가 한다. 로컬 검증 시 localhost:8080 으로 접근.
+    ports:
+      - "127.0.0.1:8080:8080"
+    mem_limit: 1g
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: challenge
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Seoul
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d challenge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # noeviction: 메모리가 차면 지우지 않고 쓰기를 거부한다 — 조용히 데이터가 사라지는 것보다 낫다.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "100mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis:/data
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      # templates/*.template 의 ${DOMAIN} 치환용. 정의된 환경변수만 치환되므로 $host 같은 nginx 변수는 안전하다.
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    # certbot 이 갱신한 인증서를 반영하려고 6시간마다 reload 한다.
+    command: ["/bin/sh", "-c", "while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec /docker-entrypoint.sh nginx -g 'daemon off;'"]
+    depends_on:
+      - app
+    logging: *default-logging
+
+  certbot:
+    image: certbot/certbot
+    profiles: ["https"]
+    restart: unless-stopped
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    # 최초 발급은 README 의 standalone 명령으로 따로 한다. 여기서는 12시간마다 갱신만 시도한다(만료 30일 전부터 실제 갱신).
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot; sleep 12h & wait $${!}; done"]
+    logging: *default-logging
+
+volumes:
+  postgres:
+  redis:
+  photos:

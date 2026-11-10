@@ -21,6 +21,8 @@ dependencies {
     implementation(libs.spring.boot.starter.security)
     implementation(libs.spring.boot.starter.validation)
     implementation(libs.spring.boot.starter.websocket)
+    // /actuator/health — docker compose healthcheck 용. 노출 범위는 application.yml management.* 참조.
+    implementation(libs.spring.boot.starter.actuator)
 
     runtimeOnly(libs.postgresql)
 

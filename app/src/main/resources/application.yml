@@ -3,7 +3,8 @@ spring:
     name: challenge-server
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/challenge
+    # 컨테이너 안에서 localhost 는 컨테이너 자신이다 — docker compose 에서는 DB_URL 로 서비스명(postgres)을 준다.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/challenge}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -116,6 +117,18 @@ challenge:
     #    서버는 row 를 지우지 않으므로 GET /challenges/{id} 는 기한 없이 열린다 —
     #    기한이 붙는 것은 **목록**뿐이다.
     completed-retention-days: ${CHALLENGE_COMPLETED_RETENTION_DAYS:7}
+
+# Actuator — health 만 노출한다 (docker compose healthcheck 용).
+# 🔴 SecurityConfig 의 permitAll 은 `/actuator/health` 한 경로뿐이다. 여기 노출 목록을 늘려도 나머지는
+#    인증이 걸리지만, 노출 자체를 health 로 묶어 두는 편이 안전하다. 상세(DB/Redis 상태)는 외부에 숨긴다.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
 
 springdoc:
   api-docs:

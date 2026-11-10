@@ -76,3 +76,8 @@ logs/
 
 ### Docker ###
 docker-compose.override.yml
+
+### deploy ###
+# FCM 키 등 컨테이너에 마운트하는 비밀 파일, Let's Encrypt 인증서·계정 키
+deploy/secrets/
+deploy/certbot/

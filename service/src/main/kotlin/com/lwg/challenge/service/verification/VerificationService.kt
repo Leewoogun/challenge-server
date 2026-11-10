@@ -357,6 +357,7 @@ class VerificationService(
         const val MSG_NOT_FOUND = "챌린지를 찾을 수 없어요"
         const val MSG_NOT_MINE = "내 챌린지가 아니에요"
         const val MSG_NOT_IN_PROGRESS = "진행 중인 챌린지만 인증할 수 있어요"
+        const val MSG_DEADLINE_PASSED = "인증 마감 시간이 지났어요"
         const val MSG_PHOTO_REQUIRED = "사진을 첨부해주세요"
         const val MSG_NOT_JPEG = "JPEG 사진만 올릴 수 있어요"
         const val MSG_VERIFICATION_MISSING = "인증 정보를 찾을 수 없어요"
@@ -399,7 +400,17 @@ class VerificationSubmitTransactionalWorker(
      */
     @Transactional
     fun submit(me: Long, challengeId: Long, photo: ByteArray): SubmitOutcome {
+        val now = LocalDateTime.now(clock)
         val challenge = loadInProgressAsParticipant(challengeId, me)
+        // 🔴 **`IN_PROGRESS` 만으로는 마감 전이라는 보장이 없다.** status 는 판정 배치가 돌아야
+        //    바뀌므로 deadline(00:00) ~ 배치(00:05) 사이, 그리고 배치가 실패하거나 서버가 죽어 있던
+        //    동안은 마감이 지났는데도 IN_PROGRESS 다. 여기서 막지 않으면 그 틈에 ① 상대 미인증을
+        //    보고 뒤늦게 올리거나 ② 배치의 AI 단계와 판정 단계 사이에 올려 **AI 판별 없이** 인증이
+        //    인정된다 (2026-10-27 보안 점검).
+        //    경계는 배치 대상 선정(`deadline <= now`)과 같게 닫는다 — 배치가 집는 순간부터 제출 불가.
+        if (!now.isBefore(challenge.deadline)) {
+            throw OneButtonDialogException(VerificationService.MSG_DEADLINE_PASSED)
+        }
         val mine = myVerification(challengeId, me)
 
         if (photo.isEmpty()) {
@@ -426,7 +437,15 @@ class VerificationSubmitTransactionalWorker(
                 status = VerificationStatus.VERIFIED,
                 photoUrl = key,
                 // 🔴 교체할 때마다 갱신된다 — `verified_at` 은 **최종 제출 시각**이다.
-                verifiedAt = LocalDateTime.now(clock),
+                verifiedAt = now,
+                // 🔴 **AI 판정은 사진에 붙은 것이다 — 사진이 바뀌면 같이 지운다.** 남겨 두면
+                //    `ai_checked_at` 멱등 가드가 새 사진을 "이미 판별함" 으로 건너뛰어, AI 반려
+                //    (FAILED) 뒤 아무 사진이나 다시 올리면 VERIFIED 로 복귀해 판별 없이 이긴다.
+                //    ADR-0013 §결정 3 의 "1건당 1회" 에서 1건은 **row 가 아니라 제출된 사진**이다.
+                aiVerdict = null,
+                aiConfidence = null,
+                aiReason = null,
+                aiCheckedAt = null,
             ),
         )
 
@@ -455,8 +474,9 @@ class VerificationSubmitTransactionalWorker(
      * 🔴 권한을 상태보다 먼저 본다. 당사자가 아닌 사람에게 *"진행 중이 아니에요"* 라고 답하면
      * 남의 챌린지 상태가 새어나간다 (`ChallengeCommandService.loadForResponse` 와 같은 이유).
      *
-     * ⚠️ **교체도 이 문을 지난다.** 마감이 지나면 `IN_PROGRESS` 가 아니므로 사진을 바꿀 수 없다 —
-     * *"마감 시점의 사진이 최종본"* 이라는 증거 보존이 여기에 걸려 있다.
+     * ⚠️ **교체도 이 문을 지난다.** 다만 이 검사만으로는 마감 후 교체가 막히지 않는다 —
+     * status 는 판정 배치가 돌 때 바뀌기 때문이다. *"마감 시점의 사진이 최종본"* 이라는 증거
+     * 보존은 이 검사 **와** [submit] 의 deadline 검사가 함께 지킨다.
      */
     private fun loadInProgressAsParticipant(challengeId: Long, me: Long): Challenge {
         val challenge = challengeRepository.loadAsParticipant(challengeId, me)
