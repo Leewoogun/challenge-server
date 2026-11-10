@@ -10,6 +10,8 @@
 #   - Docker 데몬 실행 중 (colima start)
 #   - AWS CLI 로그인 (aws login) — 만료됐으면 스크립트가 알려 준다
 #   - SSH 키 ~/.ssh/challenge-server.pem, 보안그룹 22 번에 현재 IP 가 허용돼 있을 것
+#   - deploy/.env.deploy 에 HOST=api.<도메인> (gitignore 대상 — 공개 레포에 서버 주소를 남기지 않는다)
+#     ECR 주소는 실행 시점에 aws 자격 증명에서 계정 ID·리전을 읽어 만든다 (계정 ID 도 레포에 두지 않는다)
 #
 # ════════ 무엇을 하나 ════════
 #   1. 태그 = 짧은 커밋 해시. ECR 에는 <sha> 와 latest 두 태그로 올린다.
@@ -21,19 +23,24 @@
 #   🔴 app 재생성 동안(기동 ~20초) 요청은 nginx 502 가 된다. 무중단 배포가 아니다.
 set -euo pipefail
 
-REGISTRY="${REGISTRY:-363183905996.dkr.ecr.ap-southeast-2.amazonaws.com}"
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+cd "$(dirname "$SELF")/.."
+
+# 로컬 전용 설정 (커밋 안 됨). 환경변수로 직접 줘도 된다.
+# shellcheck disable=SC1091
+[ -f deploy/.env.deploy ] && . deploy/.env.deploy
+
 REPO="${REPO:-challenge-server}"
-HOST="${HOST:-api.woo-challenge.shop}"
+HOST="${HOST:-}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/challenge-server.pem}"
 REMOTE_DIR=/srv/challenge
-IMAGE="$REGISTRY/$REPO"
 
 ROLLBACK=""; ALLOW_DIRTY=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --rollback) ROLLBACK="${2:?--rollback 뒤에 태그(커밋 해시)를 주세요}"; shift 2 ;;
     --allow-dirty) ALLOW_DIRTY=true; shift ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,8p' "$SELF"; exit 0 ;;
     *) echo "알 수 없는 옵션: $1" >&2; exit 2 ;;
   esac
 done
@@ -44,11 +51,15 @@ die()  { printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; exit 1; }
 #   BatchMode 에서는 확인 질문을 못 하므로 이게 없으면 첫 접속이 그냥 실패한다.
 remote() { ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ec2-user@$HOST" "$@" 2>/dev/null; }
 
-cd "$(dirname "$0")/.."
-
 # ── 사전 점검 ───────────────────────────────────────────────
 step "사전 점검"
-aws sts get-caller-identity >/dev/null 2>&1 || die "AWS 자격 증명이 없거나 만료됐습니다. 'aws login' 후 다시 실행하세요."
+[ -n "$HOST" ] || die "HOST 가 없습니다. deploy/.env.deploy 에 'HOST=api.<도메인>' 을 넣거나 HOST=... 로 실행하세요."
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) \
+  || die "AWS 자격 증명이 없거나 만료됐습니다. 'aws login' 후 다시 실행하세요."
+REGION=$(aws configure get region || true)
+[ -n "$REGION" ] || die "AWS 기본 리전이 없습니다. 'aws configure set region <리전>' 후 다시 실행하세요."
+REGISTRY="${REGISTRY:-$ACCOUNT.dkr.ecr.$REGION.amazonaws.com}"
+IMAGE="$REGISTRY/$REPO"
 remote true || die "SSH 접속 실패 ($HOST). 키 경로, 또는 보안그룹 22 번에 현재 IP($(curl -s https://checkip.amazonaws.com)) 가 허용됐는지 확인하세요."
 
 if [ -n "$ROLLBACK" ]; then

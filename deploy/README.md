@@ -2,66 +2,19 @@
 
 ## 서버 구성
 
-```
-[모바일 앱]
-   │  https://api.woo-challenge.shop
-   ▼
-[가비아 DNS]  A 레코드  api → 32.237.14.201 (Elastic IP)
-   │
-   ▼
-┌─ AWS ap-southeast-2 (시드니) ──────────────────────────────────────
-│
-│  보안그룹 challenge-server-sg
-│    22 ← 관리자 IP 만 / 80, 443 ← 전체 / 그 외 전부 차단
-│    │
-│  ┌─▼─ EC2 challenge-server ─────────────────────────────────────
-│  │  t4g.small · arm64 · Amazon Linux 2023 · RAM 2GB + swap 2GB
-│  │  docker compose (/srv/challenge)
-│  │
-│  │   +-------------------+   :80  → 301 https 리다이렉트, ACME 챌린지 응답
-│  │   | nginx             |   :443 → TLS 종료, 업로드 6MB 제한, WebSocket
-│  │   +---------+---------+
-│  │             |  proxy_pass http://app:8080      ^ 인증서 읽기 (6h 마다 reload)
-│  │             v                                  |
-│  │   +-------------------+              +---------+---------+
-│  │   | app               |              | certbot           |
-│  │   | Spring Boot       |              | Let's Encrypt     |
-│  │   | profile: prod     |              | renew every 12h   |
-│  │   | mem_limit 1GB     |              +-------------------+
-│  │   +----+---------+----+   127.0.0.1:8080 (외부 비공개)
-│  │        |         |
-│  │        v         v
-│  │   +---------+ +---------+   같은 compose 네트워크 — 서비스명이 곧 호스트명
-│  │   |postgres | | redis   |   postgres / redis 는 포트를 공개하지 않는다
-│  │   |16 512MB | |7 128MB  |
-│  │   +---------+ +---------+
-│  │
-│  │  ── 볼륨 (EBS 30GB gp3, 암호화) ──
-│  │    named : postgres(DB) · redis(AOF) · photos(인증 사진 /data/photos)
-│  │    bind  : .env · secrets/fcm.json · certbot/conf(인증서) · nginx/templates
-│  └──────────────────────────────────────────────────────────────
-│     ▲
-│     │ docker pull (인스턴스 IAM 역할 + ecr-login 헬퍼 → docker login 불필요)
-│     │
-│  +--+-----------------------+   IAM 역할 challenge-server-ec2-role
-│  | ECR challenge-server     |     · AmazonEC2ContainerRegistryReadOnly
-│  | tags: latest, <git-sha>  |     · AmazonSSMManagedInstanceCore (SSM 접속)
-│  | keep last 10, scan push  |
-│  +--^-----------------------+
-└─────┼──────────────────────────────────────────────────────────────
-      │ docker push (aws login 자격 증명)
-[개발 Mac]  ./gradlew :app:bootJar → docker build --platform linux/arm64
-```
+![challenge-server 운영 구성](architecture.png)
+
+> 그림 원본: `architecture.py` (구성이 바뀌면 파일 상단 안내대로 다시 생성)
 
 | 항목 | 값 |
 |---|---|
-| 도메인 | `api.woo-challenge.shop` (가비아, 네임서버 기본값) |
+| 도메인 | `api.<도메인>` (가비아, 네임서버 기본값) — 실제 값은 EC2 `.env` 의 `DOMAIN`, 로컬 `deploy/.env.deploy` 의 `HOST` |
 | 리전 | `ap-southeast-2` 시드니 — AWS 신규 가입 방식(프로젝트)은 한국 주소면 시드니로 고정된다 |
 | EC2 | `challenge-server` · t4g.small · 종료 보호 ON · EBS `DeleteOnTermination=false` · IMDSv2 필수 |
-| 고정 IP | Elastic IP `32.237.14.201` — 인스턴스를 지워도 남아 과금된다. 정리 시 release 할 것 |
+| 고정 IP | Elastic IP (가비아 A 레코드 `api` 가 가리키는 값) — 인스턴스를 지워도 남아 과금된다. 정리 시 release 할 것 |
 | 이미지 | `<계정ID>.dkr.ecr.ap-southeast-2.amazonaws.com/challenge-server` |
 | 비밀값 | `/srv/challenge/.env` (chmod 600) — DB 비밀번호·JWT 키는 서버에서 생성, 레포·로컬에 없음 |
-| 접속 | `ssh -i ~/.ssh/challenge-server.pem ec2-user@api.woo-challenge.shop` (또는 SSM Session Manager) |
+| 접속 | `ssh -i ~/.ssh/challenge-server.pem ec2-user@api.<도메인>` (또는 SSM Session Manager) |
 
 ## 파일
 
