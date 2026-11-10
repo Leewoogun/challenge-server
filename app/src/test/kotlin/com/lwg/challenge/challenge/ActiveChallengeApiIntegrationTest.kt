@@ -280,7 +280,7 @@ class ActiveChallengeApiIntegrationTest {
             .andExpect(jsonPath("$.data.activeChallenges[0].me.verificationStatus").value("PENDING"))
             .andExpect(jsonPath("$.data.activeChallenges[0].opponent.verificationStatus").value("VERIFIED"))
             .andExpect(jsonPath("$.data.activeChallenges[0].bet").value("커피 사기"))
-            .andExpect(jsonPath("$.data.activeChallenges[0].deadline").value("2026-05-30T00:00:00Z"))
+            .andExpect(jsonPath("$.data.activeChallenges[0].deadline").value("2026-05-30 00:00:00"))
             .andExpect(jsonPath("$.data.activeChallenges[1].challengeId").value(cB.id!!))
             .andExpect(jsonPath("$.data.activeChallenges[1].me.mission").value("물 2L 마시기"))
             .andExpect(jsonPath("$.data.activeChallenges[1].opponent.nickname").value("지연"))
@@ -288,7 +288,7 @@ class ActiveChallengeApiIntegrationTest {
             .andExpect(jsonPath("$.data.activeChallenges[1].me.verificationStatus").value("PENDING"))
             .andExpect(jsonPath("$.data.activeChallenges[1].opponent.verificationStatus").value("PENDING"))
             .andExpect(jsonPath("$.data.activeChallenges[1].bet").value("저녁 사기"))
-            .andExpect(jsonPath("$.data.activeChallenges[1].deadline").value("2026-06-05T00:00:00Z"))
+            .andExpect(jsonPath("$.data.activeChallenges[1].deadline").value("2026-06-05 00:00:00"))
     }
 
     @Test

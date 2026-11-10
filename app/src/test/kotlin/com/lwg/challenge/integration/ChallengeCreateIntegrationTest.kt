@@ -28,6 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.http.MediaType
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.test.web.servlet.MockMvc
@@ -87,6 +88,9 @@ class ChallengeCreateIntegrationTest {
     @Autowired
     lateinit var jwtTokenProvider: JwtTokenProvider
 
+    @Autowired
+    lateinit var jdbcTemplate: JdbcTemplate
+
     companion object {
 
         /** soul-oath 이후 생성·수락이 서명을 요구한다. 유효한 최소 서명 — **DB 에 이 문자열이 그대로 저장돼야 한다.** */
@@ -140,11 +144,11 @@ class ChallengeCreateIntegrationTest {
 
     @AfterEach
     fun resetState() {
-        // FK 의존 역순으로 정리.
-        verificationJpaRepository.deleteAll()
-        challengeJpaRepository.deleteAll()
-        friendshipJpaRepository.deleteAll()
-        userJpaRepository.deleteAll()
+        // 🔴 repository.deleteAll() 을 FK 역순으로 나열하지 않는다 — 수락 시 생기는 contracts 처럼
+        //    나중에 추가된 테이블이 목록에서 빠지면 challenges 삭제가 FK 위반으로 실패하고, 남은 users 가
+        //    다음 테스트에서 kakao_id 중복으로 연쇄 실패했다. CASCADE 는 users 를 참조하는 테이블을
+        //    재귀적으로 함께 비우므로 테이블이 늘어나도 이 정리는 깨지지 않는다.
+        jdbcTemplate.execute("TRUNCATE TABLE users CASCADE")
     }
 
     // ─── 1. 신청 ─────────────────────────────────────────────────

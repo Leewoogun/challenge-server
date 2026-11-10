@@ -5,7 +5,6 @@ import com.github.tomakehurst.wiremock.WireMockServer
 import com.github.tomakehurst.wiremock.client.WireMock.aResponse
 import com.github.tomakehurst.wiremock.client.WireMock.equalTo
 import com.github.tomakehurst.wiremock.client.WireMock.get
-import com.github.tomakehurst.wiremock.client.WireMock.stubFor
 import com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration
 import com.lwg.challenge.core.hash.PhoneHasher
@@ -152,7 +151,7 @@ class AuthKakaoIntegrationTest {
             append("}")
         }
         val body = """{"id":$id,"kakao_account":$kakaoAccountJson}"""
-        stubFor(
+        wireMockServer.stubFor(
             get(urlEqualTo("/v2/user/me"))
                 .withHeader("Authorization", equalTo("Bearer $accessToken"))
                 .willReturn(
@@ -165,7 +164,7 @@ class AuthKakaoIntegrationTest {
     }
 
     private fun stubKakaoUserUnauthorized(accessToken: String) {
-        stubFor(
+        wireMockServer.stubFor(
             get(urlEqualTo("/v2/user/me"))
                 .withHeader("Authorization", equalTo("Bearer $accessToken"))
                 .willReturn(
@@ -178,7 +177,7 @@ class AuthKakaoIntegrationTest {
     }
 
     private fun stubKakaoUserServerError(accessToken: String) {
-        stubFor(
+        wireMockServer.stubFor(
             get(urlEqualTo("/v2/user/me"))
                 .withHeader("Authorization", equalTo("Bearer $accessToken"))
                 .willReturn(

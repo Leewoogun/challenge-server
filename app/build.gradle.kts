@@ -2,6 +2,10 @@ plugins {
     alias(libs.plugins.challenge.spring.boot)
 }
 
+// Spring Boot BOM 이 testcontainers 버전을 관리해 version catalog 값을 덮어쓴다(전이 의존성만 1.21.0 으로 끌려가
+// 모듈 간 버전이 섞였다). BOM 속성을 catalog 값으로 맞춰 한 버전으로 고정한다.
+extra["testcontainers.version"] = libs.versions.testcontainers.get()
+
 dependencies {
     implementation(projects.core)
     implementation(projects.domain.model)

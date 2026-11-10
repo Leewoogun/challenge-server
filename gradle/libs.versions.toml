@@ -6,7 +6,9 @@ springdoc = "2.8.6"
 jjwt = "0.12.6"
 querydsl = "5.1.0"
 wiremock = "3.9.1"
-testcontainers = "1.20.4"
+# 🔴 1.21.4 미만은 Docker Engine 29+ 와 통신하지 못한다 (docker-java 가 API 1.32 로 요청 → "client version too old").
+#    이 값은 app/build.gradle.kts 에서 Spring Boot BOM 의 testcontainers.version 도 덮어쓴다.
+testcontainers = "1.21.4"
 firebase-admin = "9.10.0"
 
 [libraries]
