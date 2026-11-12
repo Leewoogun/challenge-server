@@ -53,6 +53,10 @@ services:
       TZ: Asia/Seoul
     volumes:
       - postgres:/var/lib/postgresql/data
+    # DB 클라이언트(DataGrip) 접속용 — SSH 터널 전용. 127.0.0.1 바인딩이라 외부에서는 닿지 않는다
+    # (보안그룹도 22/80/443 만 연다). 15432 인 이유: 로컬 검증 시 Mac 의 Homebrew Postgres(5432) 와 충돌 방지.
+    ports:
+      - "127.0.0.1:15432:5432"
     mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d challenge"]
